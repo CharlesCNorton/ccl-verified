@@ -1,21 +1,11 @@
 (** * Connected Component Labeling in Coq
-
-    This formalization develops a verified implementation of connected component
-    labeling (CCL), a fundamental algorithm in computer vision and image processing.
     
-    ** Overview
+    Verified implementation of connected component labeling (CCL) for binary images.
+    CCL assigns unique labels to connected regions of foreground pixels, where
+    connectivity is defined by 4- or 8-adjacency.
     
-    Connected component labeling assigns unique labels to connected regions of 
-    foreground pixels in a binary image. Two pixels belong to the same component
-    if and only if there exists a path of foreground pixels connecting them,
-    where adjacency is defined by either 4-connectivity or 8-connectivity.
-    
-    ** Why formalize this?
-    
-    CCL is ubiquitous in vision systems, yet implementations can contain subtle
-    bugs, especially at image boundaries or with complex pixel patterns. A formal
-    verification provides confidence for safety-critical applications and serves
-    as a foundation for verifying more complex vision algorithms.
+    This formalization provides mechanically-checked correctness for safety-critical
+    vision systems and serves as a foundation for verifying more complex algorithms.
 *)
 
 Require Import Coq.Init.Prelude.
@@ -6927,7 +6917,7 @@ Proof.
 Qed.
 
 
-(** ** Labels Form Equivalence Classes *)
+(** ** Labels form an equivalence relation on foreground pixels *)
 Theorem ccl_4_equivalence_relation : forall img,
   let final_labeling := ccl_4 img in
   let same_component c1 c2 := final_labeling c1 = final_labeling c2 in
@@ -6954,7 +6944,7 @@ Proof.
     rewrite H12. assumption.
 Qed.
 
-(** ** Components Partition Foreground *)
+(** ** Foreground pixels are partitioned into disjoint components *)
 Theorem ccl_4_partitions_foreground : forall img,
   let final_labeling := ccl_4 img in
   forall c1 c2,
@@ -6969,8 +6959,7 @@ Proof.
   - right. assumption.
 Qed.
 
-
-(** Helper: process_pixel preserves the label bound *)
+(** Processing a pixel maintains label bounds: all labels stay below next_label *)
 Lemma process_pixel_preserves_label_bound : forall img adj check_neighbors s c c',
   next_label s > 0 ->
   (forall c'', labels s c'' <= next_label s - 1) ->
@@ -6996,7 +6985,7 @@ Proof.
   lia.
 Qed.
 
-(** Helper: process_pixel preserves uf bound for old values *)
+(** Union-find values for old labels remain bounded after processing *)
 Lemma process_pixel_preserves_old_uf_bound : forall img adj check_neighbors s c m,
   (forall m', m' <= next_label s - 1 -> uf_find (equiv s) m' <= next_label s - 1) ->
   (forall c', labels s c' <= next_label s - 1) ->
@@ -7011,7 +7000,7 @@ Proof.
   exact Hbound.
 Qed.
 
-(** Helper: Unused labels map to themselves in initial state *)
+(** Labels beyond next_label in initial state map to themselves (identity) *)
 Lemma initial_unused_labels_identity : forall m,
   m >= next_label initial_state ->
   uf_find (equiv initial_state) m = m.
@@ -7022,7 +7011,7 @@ Proof.
   reflexivity.
 Qed.
 
-(** Helper: In initial state, uf_find preserves range *)
+(** uf_init preserves upper bounds on its inputs *)
 Lemma uf_init_in_range : forall m bound,
   m <= bound ->
   uf_find uf_init m <= bound.
@@ -7032,7 +7021,7 @@ Proof.
   assumption.
 Qed.
 
-(** Helper: uf_union preserves range when all values are bounded *)
+(** uf_union maintains upper bounds when all inputs are bounded *)
 Lemma uf_union_preserves_range : forall u x y m bound,
   (forall n, n <= bound -> uf_find u n <= bound) ->
   x <= bound ->
@@ -7050,7 +7039,7 @@ Proof.
     apply Hinv. assumption.
 Qed.
 
-(** Helper: record_adjacency preserves range *)
+(** record_adjacency maintains upper bounds on union-find values *)
 Lemma record_adjacency_preserves_range : forall u l1 l2 m bound,
   (forall n, n <= bound -> uf_find u n <= bound) ->
   l1 <= bound ->
@@ -7070,7 +7059,7 @@ Proof.
     apply Hinv. assumption.
 Qed.
 
-(** Helper: fold_left with record_adjacency preserves range *)
+(** Folding record_adjacency operations preserves upper bounds *)
 Lemma fold_record_adjacency_preserves_range : forall labels min_label u m bound,
   (forall n, n <= bound -> uf_find u n <= bound) ->
   min_label <= bound ->
@@ -7092,7 +7081,7 @@ Proof.
       apply Hall. left. reflexivity.
 Qed.
 
-(** Helper: uf_find never increases values *)
+(** uf_find never maps a value to something larger than itself *)
 Lemma uf_find_bounded_by_self : forall u n,
   (forall m, uf_find u m <= m) ->
   uf_find u n <= n.
@@ -7101,7 +7090,7 @@ Proof.
   apply H.
 Qed.
 
-(** Helper: Initial state satisfies uf_find <= identity *)
+(** Initial state's uf_find is bounded by identity function *)
 Lemma initial_uf_find_bounded : forall m,
   uf_find (equiv initial_state) m <= m.
 Proof.
@@ -7111,7 +7100,7 @@ Proof.
   reflexivity.
 Qed.
 
-(** Helper: Initial state satisfies both invariants *)
+(** Initial state satisfies both key invariants for union-find bounds *)
 Lemma initial_state_both_invariants :
   (forall n, n <= next_label initial_state - 1 -> 
              uf_find (equiv initial_state) n <= next_label initial_state - 1) /\
@@ -7127,7 +7116,7 @@ Proof.
     unfold uf_find, uf_init. reflexivity.
 Qed.
 
-(** Helper 1: process_pixel preserves next_label positivity *)
+(** Processing maintains next_label > 0 throughout algorithm *)
 Lemma process_pixel_preserves_next_positive : forall img adj check_neighbors s c,
   next_label s > 0 ->
   next_label (process_pixel img adj check_neighbors s c) > 0.
@@ -7137,7 +7126,7 @@ Proof.
   assumption.
 Qed.
 
-(** Helper 2: fold_left with process_pixel preserves next_label positivity *)
+(** Folding process_pixel maintains next_label > 0 throughout algorithm *)
 Lemma fold_process_preserves_next_positive : forall img adj check_neighbors coords s,
   next_label s > 0 ->
   next_label (fold_left (process_pixel img adj check_neighbors) coords s) > 0.
@@ -7147,7 +7136,7 @@ Proof.
   assumption.
 Qed.
 
-(** Helper 3b: In initial state, unused labels map to themselves *)
+(** Initial state maps unused labels (>= next_label) to themselves *)
 Lemma initial_unused_identity : forall n,
   n >= next_label initial_state ->
   uf_find (equiv initial_state) n = n.
@@ -7158,7 +7147,7 @@ Proof.
   reflexivity.
 Qed.
 
-(** Helper 3c: uf_find never increases values in initial state *)
+(** Initial state's uf_find is bounded by identity *)
 Lemma initial_uf_find_le : forall n,
   uf_find (equiv initial_state) n <= n.
 Proof.
@@ -7168,11 +7157,11 @@ Proof.
   reflexivity.
 Qed.
 
-(** Helper 3d: process_pixel preserves uf_find bounds with unused invariant *)
+(** Processing preserves union-find bounds with unused label tracking *)
 Lemma process_pixel_preserves_uf_bound_with_unused : forall img adj check_neighbors s c n,
   next_label s > 0 ->
   (forall m, m < next_label s -> uf_find (equiv s) m < next_label s) ->
-  (forall m, m >= next_label s -> uf_find (equiv s) m = m) ->  (* Added invariant *)
+  (forall m, m >= next_label s -> uf_find (equiv s) m = m) ->  
   (forall c', labels s c' < next_label s) ->
   n < next_label (process_pixel img adj check_neighbors s c) ->
   uf_find (equiv (process_pixel img adj check_neighbors s c)) n < 
@@ -7203,13 +7192,13 @@ Proof.
       simpl in *. lia.
 Qed.
 
-(** Helper: record_adjacency doesn't touch labels >= bound *)
+(** record_adjacency leaves unused labels (>= bound) unchanged as identity *)
 Lemma record_adjacency_preserves_unused : forall u l1 l2 n bound,
   l1 < bound ->
   l2 < bound ->
   n >= bound ->
-  (forall m, m < bound -> uf_find u m < bound) ->  (* Key: bounded maps to bounded *)
-  (forall m, m >= bound -> uf_find u m = m) ->     (* unused stay identity *)
+  (forall m, m < bound -> uf_find u m < bound) ->
+  (forall m, m >= bound -> uf_find u m = m) ->
   uf_find (record_adjacency u l1 l2) n = n.
 Proof.
   intros u l1 l2 n bound Hl1 Hl2 Hn Hbounded Hunused.
@@ -7230,7 +7219,7 @@ Proof.
   - apply Hunused. assumption.
 Qed.
 
-(** Helper: fold_left with record_adjacency preserves unused *)
+(** Folding record_adjacency operations preserves unused label identity mapping *)
 Lemma fold_record_adjacency_preserves_unused : forall labels min_label u n bound,
   min_label < bound ->
   (forall l, In l labels -> l < bound) ->
@@ -7261,7 +7250,7 @@ Proof.
       * assumption.
 Qed.
 
-(** Helper: process_pixel preserves unused labels *)
+(** Processing preserves identity mapping for unused labels (>= next_label) *)
 Lemma process_pixel_preserves_unused : forall img adj check_neighbors s c n,
   n >= next_label s ->
   (forall m, m < next_label s -> uf_find (equiv s) m < next_label s) ->
@@ -7308,7 +7297,7 @@ Proof.
     apply Hunused. assumption.
 Qed.
 
-(** Part 1: process_pixel preserves bounded invariant *)
+(** Processing maintains the bounded invariant: used labels stay within bounds *)
 Lemma process_pixel_preserves_bounded_invariant : forall img adj check_neighbors s c,
   next_label s > 0 ->
   (forall n, n <= next_label s - 1 -> uf_find (equiv s) n <= next_label s - 1) ->
@@ -7338,7 +7327,7 @@ Proof.
     * intros c'. assert (labels s c' <= next_label s - 1) by apply Hinv_labels. lia.
 Qed.
 
-(** Part 2: process_pixel preserves unused invariant *)
+(** Processing maintains the unused invariant: labels >= next_label stay as identity *)
 Lemma process_pixel_preserves_unused_invariant : forall img adj check_neighbors s c,
   next_label s > 0 ->
   (forall n, n <= next_label s - 1 -> uf_find (equiv s) n <= next_label s - 1) ->
@@ -7366,7 +7355,7 @@ Proof.
     lia.
 Qed.
 
-(** Helper: process_pixel preserves both invariants *)
+(** Processing maintains both critical union-find invariants simultaneously *)
 Lemma process_pixel_preserves_both_invariants : forall img adj check_neighbors s c,
   next_label s > 0 ->
   (forall n, n <= next_label s - 1 -> uf_find (equiv s) n <= next_label s - 1) ->
@@ -7382,7 +7371,7 @@ Proof.
   - apply process_pixel_preserves_unused_invariant; assumption.
 Qed.
 
-(** Lemma 1: fold_left with process_pixel preserves BOTH invariants *)
+(** Main invariant preservation: fold_left maintains dual union-find bounds *)
 Lemma fold_process_preserves_uf_find_bound : forall img adj check_neighbors coords s,
   next_label s > 0 ->
   (forall n, n <= next_label s - 1 -> uf_find (equiv s) n <= next_label s - 1) ->
@@ -7409,7 +7398,7 @@ Proof.
       apply process_pixel_preserves_label_bound; assumption.
 Qed.
 
-(** Lemma 2: Main theorem using the fold lemma *)
+(** Key theorem: ccl_pass maintains union-find values within next_label bound *)
 Lemma uf_find_ccl_pass_bounded : forall img adj check_neighbors m,
   m <= next_label (ccl_pass img adj check_neighbors) - 1 ->
   uf_find (equiv (ccl_pass img adj check_neighbors)) m <= 
@@ -7435,10 +7424,7 @@ Proof.
   exact Hm.
 Qed.
 
-
-
-    
-(** Finally, the main theorem is proven *)
+(** Main bound preservation theorem for union-find through entire algorithm *)
 Theorem uf_find_preserves_ccl_bound : forall img adj check_neighbors n,
   let s := ccl_pass img adj check_neighbors in
   n <= next_label s - 1 ->
@@ -7450,7 +7436,7 @@ Proof.
   assumption.
 Qed.
 
-(** Updated ccl_4_foreground_positive using the proved theorem *)
+(** Foreground pixels receive positive labels in final result *)
 Theorem ccl_4_foreground_positive : forall img c,
   get_pixel img c = true ->
   ccl_4 img c > 0.
