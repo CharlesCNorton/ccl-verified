@@ -12,7 +12,7 @@
     
     ** Why formalize this?
     
-    CCL is ubiquitous in vision systems, yet implementations often contain subtle
+    CCL is ubiquitous in vision systems, yet implementations can contain subtle
     bugs, especially at image boundaries or with complex pixel patterns. A formal
     verification provides confidence for safety-critical applications and serves
     as a foundation for verifying more complex vision algorithms.
