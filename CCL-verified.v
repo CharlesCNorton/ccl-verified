@@ -7519,7 +7519,7 @@ Proof.
 Qed.
 
 
-(** ** MAIN CORRECTNESS: ccl_4 satisfies the specification (3 of 4 properties) *)
+(** ** MAIN CORRECTNESS: ccl_4 correctly partitions foreground into connected components *)
 Theorem ccl_4_correct_partial : forall img,
   (* 1. Background pixels get label 0 *)
   (forall c, get_pixel img c = false -> ccl_4 img c = 0) /\
