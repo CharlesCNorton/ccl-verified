@@ -8166,6 +8166,123 @@ Example my_test_connected :
   test_connectivity my_test_image (0,0) (3,3) = true.
 Proof. compute. reflexivity. Qed.
 
+(** The Pathological Maze: A torture test for connected component labeling
+    This image has several diabolical features:
+    1. Two spirals that interleave but never touch (should be 2 components)
+    2. A single pixel that bridges what looks like separate regions
+    3. A component that surrounds another without touching
+    4. Maximum union-find path compression stress
+*)
+
+
+(** The Pathological Maze: A torture test for connected component labeling *)
+Definition pathological_maze : image :=
+  mkImage 15 15 (fun c =>
+    match c with
+    (* SPIRAL A: Clockwise from outside *)
+    | (0,0) | (1,0) | (2,0) | (3,0) | (4,0) | (5,0) | (6,0) | (7,0) | (8,0) | (9,0) | (10,0) | (11,0) | (12,0) | (13,0) | (14,0) => true
+    | (14,1) | (14,2) | (14,3) | (14,4) | (14,5) | (14,6) | (14,7) | (14,8) | (14,9) | (14,10) | (14,11) | (14,12) | (14,13) | (14,14) => true
+    | (13,14) | (12,14) | (11,14) | (10,14) | (9,14) | (8,14) | (7,14) | (6,14) | (5,14) | (4,14) | (3,14) | (2,14) | (1,14) | (0,14) => true
+    | (0,13) | (0,12) | (0,11) | (0,10) | (0,9) | (0,8) | (0,7) | (0,6) | (0,5) | (0,4) | (0,3) | (0,2) | (0,1) => true
+    
+    (* SPIRAL A continues inward *)
+    | (2,2) | (3,2) | (4,2) | (5,2) | (6,2) | (7,2) | (8,2) | (9,2) | (10,2) | (11,2) | (12,2) => true
+    | (12,3) | (12,4) | (12,5) | (12,6) | (12,7) | (12,8) | (12,9) | (12,10) | (12,11) | (12,12) => true
+    | (11,12) | (10,12) | (9,12) | (8,12) | (7,12) | (6,12) | (5,12) | (4,12) | (3,12) | (2,12) => true
+    | (2,11) | (2,10) | (2,9) | (2,8) | (2,7) | (2,6) | (2,5) | (2,4) | (2,3) => true
+    
+    (* THE CRITICAL BRIDGE: This single pixel connects parts *)
+    | (6,6) => true
+    
+    (* CENTER BLOB *)
+    | (6,7) | (7,7) | (6,8) | (7,8) => true
+    
+    | _ => false
+    end).
+
+(** Display the original pathological maze *)
+Compute show_original pathological_maze (height pathological_maze).
+    
+(** Run CCL and display the labeled components *)
+Compute display_image pathological_maze (ccl_4 pathological_maze) (height pathological_maze).
+
+(** Test: Are the outer and inner spirals really separate? *)
+Example pathological_spirals_separate :
+  ccl_4 pathological_maze (0,0) <> ccl_4 pathological_maze (2,2).
+Proof.
+  compute. discriminate.
+Qed.
+
+(** Test: Is the center blob isolated? *)
+Example pathological_center_isolated :
+  ccl_4 pathological_maze (6,7) <> ccl_4 pathological_maze (0,0) /\
+  ccl_4 pathological_maze (6,7) <> ccl_4 pathological_maze (2,2).
+Proof.
+  compute. split; discriminate.
+Qed.
+
+(** The Single-Pixel Bridge From Hell *)
+Definition bridge_from_hell : image :=
+  mkImage 9 5 (fun c =>
+    match c with
+    (* Left block *)
+    | (0,0) | (1,0) | (2,0) => true
+    | (0,1) | (1,1) | (2,1) => true
+    | (0,2) | (1,2) | (2,2) => true
+    | (0,3) | (1,3) | (2,3) => true
+    | (0,4) | (1,4) | (2,4) => true
+    (* THE BRIDGE: single pixel at (3,2) *)
+    | (3,2) => true
+    (* Small connector *)
+    | (4,2) => true
+    (* Right block *)
+    | (5,0) | (6,0) | (7,0) | (8,0) => true
+    | (5,1) | (6,1) | (7,1) | (8,1) => true
+    | (5,2) | (6,2) | (7,2) | (8,2) => true  
+    | (5,3) | (6,3) | (7,3) | (8,3) => true
+    | (5,4) | (6,4) | (7,4) | (8,4) => true
+    | _ => false
+    end).
+    
+    (** Display the bridge pattern *)
+Compute show_original bridge_from_hell (height bridge_from_hell).
+
+(** Run CCL on the bridge image *)
+Compute display_image bridge_from_hell (ccl_4 bridge_from_hell) (height bridge_from_hell).
+
+(** Verify: The bridge connects left and right blocks into ONE component *)
+Example bridge_connects_blocks :
+  ccl_4 bridge_from_hell (0,0) = ccl_4 bridge_from_hell (8,4).
+Proof.
+  compute. reflexivity.
+Qed.
+
+(** The Zipper Pattern: Forces maximum label equivalence merging *)
+Definition zipper_pattern : image :=
+  mkImage 20 3 (fun c =>
+    match c with
+    (* Top row: every even x *)
+    | (0,0) | (2,0) | (4,0) | (6,0) | (8,0) | (10,0) | (12,0) | (14,0) | (16,0) | (18,0) => true
+    (* Middle row: every x *)
+    | (x,1) => true  (* This connects ALL top pixels! *)
+    (* Bottom row: every odd x *)
+    | (1,2) | (3,2) | (5,2) | (7,2) | (9,2) | (11,2) | (13,2) | (15,2) | (17,2) | (19,2) => true
+    | _ => false
+    end).
+    
+    (** Display the zipper pattern *)
+Compute show_original zipper_pattern (height zipper_pattern).
+
+(** Run CCL on the zipper - this should all be ONE component *)
+Compute display_image zipper_pattern (ccl_4 zipper_pattern) (height zipper_pattern).
+
+(** Verify: The entire zipper is ONE component due to the middle row *)
+Example zipper_is_one_component :
+  ccl_4 zipper_pattern (0,0) = ccl_4 zipper_pattern (19,2).
+Proof.
+  compute. reflexivity.
+Qed.
+
 (** ** Summary *)
 (** 
   Complete formal verification of connected component labeling in Coq.
