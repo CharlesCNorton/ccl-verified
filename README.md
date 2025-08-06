@@ -85,7 +85,7 @@ Future work includes:
 
 ## 📄 License
 
-[Your chosen license]
+[MIT]
 
 ## 📚 Citation
 
