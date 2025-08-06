@@ -8295,3 +8295,163 @@ Qed.
   MAIN THEOREMS: ccl_4_main_correctness, connected_pixels_same_label,
   uf_find_ccl_pass_bounded, process_pixel_preserves_both_invariants
 *)
+
+(** * Extraction Module for Connected Component Labeling
+    
+    This module extracts our verified CCL implementation to OCaml.
+*)
+
+Require Import ExtrOcamlBasic.
+Require Import ExtrOcamlNatInt.
+Require Import ExtrOcamlString.
+
+(** ** Set output directory for extracted files *)
+Extraction Language OCaml.
+Set Extraction Output Directory ".".  (* Current directory *)
+(* Or use a specific path like "extracted" or "./ocaml" *)
+
+(** ** Extraction Directives for Efficient OCaml *)
+
+(** Extract nat to OCaml int for efficiency *)
+Extract Inductive nat => "int" 
+  [ "0" "(fun x -> x + 1)" ]
+  "(fun zero succ n -> if n = 0 then zero () else succ (n-1))".
+
+(** Arithmetic operations *)
+Extract Constant plus => "( + )".
+Extract Constant mult => "( * )".
+Extract Constant minus => "(fun x y -> max 0 (x - y))".
+Extract Constant Nat.eqb => "( = )".
+Extract Constant Nat.leb => "( <= )".
+Extract Constant Nat.ltb => "( < )".
+Extract Constant Nat.min => "min".
+Extract Constant Nat.max => "max".
+Extract Constant Nat.even => "(fun n -> n mod 2 = 0)".
+Extract Constant Nat.add => "( + )".
+Extract Constant Nat.sub => "(fun x y -> max 0 (x - y))".
+Extract Constant Nat.div => "( / )".
+Extract Constant Nat.modulo => "(fun x y -> if y = 0 then 0 else x mod y)".
+
+(** Boolean operations *)
+Extract Inductive bool => "bool" [ "true" "false" ].
+Extract Constant andb => "( && )".
+Extract Constant orb => "( || )".
+Extract Constant negb => "not".
+Extract Constant Bool.eqb => "( = )".
+
+(** List operations *)
+Extract Inductive list => "list" [ "[]" "(::)" ].
+Extract Constant app => "(@)".
+Extract Constant length => "List.length".
+Extract Constant filter => "List.filter".
+Extract Constant fold_left => "(fun f a l -> List.fold_left f a l)".
+Extract Constant fold_right => "(fun f l a -> List.fold_right f l a)".
+Extract Constant map => "List.map".
+Extract Constant existsb => "List.exists".
+Extract Constant forallb => "List.for_all".
+Extract Constant nth_error => 
+  "(fun l n -> try Some (List.nth l n) with _ -> None)".
+Extract Constant seq => "(fun start len -> 
+  let rec aux i acc = 
+    if i < 0 then acc else aux (i-1) (i+start :: acc) 
+  in aux (len-1) [])".
+
+(** Option type *)
+Extract Inductive option => "option" [ "Some" "None" ].
+
+(** Pair type *)
+Extract Inductive prod => "( * )" [ "(,)" ].
+Extract Constant fst => "fst".
+Extract Constant snd => "snd".
+
+(** String operations for display *)
+Extract Inductive string => "string" 
+  ["''" "(fun c s -> (String.make 1 c) ^ s)"].
+Extract Inductive ascii => "char" 
+  ["(fun b0 b1 b2 b3 b4 b5 b6 b7 -> 
+     Char.chr (
+       (if b0 then 1 else 0) +
+       (if b1 then 2 else 0) +
+       (if b2 then 4 else 0) + 
+       (if b3 then 8 else 0) +
+       (if b4 then 16 else 0) +
+       (if b5 then 32 else 0) +
+       (if b6 then 64 else 0) +
+       (if b7 then 128 else 0)))"].
+
+(** ** Inline simple functions for efficiency *)
+
+(** Coordinates *)
+Extract Inlined Constant coord_x => "fst".
+Extract Inlined Constant coord_y => "snd".
+Extract Inlined Constant coord_eqb => "(=)".
+
+(** Simple arithmetic *)
+Extract Inlined Constant abs_diff => "(fun a b -> abs (a - b))".
+
+(** ** Set extraction options *)
+Set Extraction Optimize.
+Set Extraction SafeImplicits.
+Set Extraction KeepSingleton.
+
+(** ** Main Extraction Command *)
+
+(** Create standalone OCaml module with essential functions *)
+Extraction "ccl_verified.ml"
+  (* Core types *)
+  coord coord_x coord_y coord_eqb
+  image mkImage get_pixel in_bounds width height pixels
+  labeling empty_labeling
+  
+  (* Adjacency *)
+  adjacent_4 adjacent_8
+  abs_diff
+  
+  (* Prior neighbors *)
+  prior_neighbors_4 prior_neighbors_8
+  check_prior_neighbors_4 check_prior_neighbors_8
+  
+  (* Coordinate utilities *)
+  all_coords seq_coords seq_coords_row
+  raster_lt
+  
+  (* Union-find *)
+  uf uf_init uf_find uf_union uf_same_set
+  record_adjacency uf_from_equiv_list
+  resolve_labels get_representative
+  build_label_map compact_labels
+  
+  (* CCL algorithm *)
+  ccl_state mkCCLState labels equiv next_label
+  initial_state
+  process_pixel
+  ccl_pass
+  ccl_algorithm
+  ccl_4
+  ccl_8
+  
+  (* Analysis functions *)
+  num_components
+  count_unique_labels
+  component_size
+  component_bounds
+  
+  (* Image creation helpers *)
+  coords_to_image
+  rows_to_image
+  build_image
+  
+  (* Display functions *)
+  label_to_ascii
+  show_pixel show_row show_original
+  display_row display_image
+  
+  (* Connected predicate for testing *)
+  connected.
+
+(** 
+  Extraction complete! 
+  Generated files:
+  - ccl_verified.ml (implementation)
+  - ccl_verified.mli (interface)
+*)
