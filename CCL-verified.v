@@ -1,12 +1,21 @@
-(** * Connected Component Labeling in Coq
-    
-    Verified implementation of connected component labeling (CCL) for binary images.
-    CCL assigns unique labels to connected regions of foreground pixels, where
-    connectivity is defined by 4- or 8-adjacency.
-    
-    This formalization provides mechanically-checked correctness for safety-critical
-    vision systems and serves as a foundation for verifying more complex algorithms.
-*)
+(******************************************************************************)
+(*                                                                            *)
+(*                           CCL VERIFIED                                     *)
+(*                                                                            *)
+(*        Connected Component Labeling: A Formal Verification                 *)
+(*                                                                            *)
+(*     Machine-checked implementation of CCL for binary images with           *)
+(*     4- and 8-adjacency. Foundation for safety-critical vision systems.     *)
+(*                                                                            *)
+(*     "The question of whether a computer can think is no more               *)
+(*      interesting than the question of whether a submarine can swim."       *)
+(*                                              - Edsger Dijkstra             *)
+(*                                                                            *)
+(*     Author: Charles C. Norton                                              *)
+(*     Date: December 5, 2025                                                 *)
+(*                                                                            *)
+(******************************************************************************)
+
 
 Require Import Coq.Init.Prelude.
 Require Import Coq.Init.Nat.
