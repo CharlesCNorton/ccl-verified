@@ -28,6 +28,19 @@ Require Import Coq.micromega.Lia.
 
 Open Scope nat_scope.
 
+Lemma NoDup_app {A : Type} : forall (l1 l2 : list A),
+  NoDup l1 -> NoDup l2 -> (forall x, In x l1 -> ~In x l2) -> NoDup (l1 ++ l2).
+Proof.
+  induction l1; intros l2 Hnd1 Hnd2 Hdisj.
+  - simpl. assumption.
+  - simpl. inversion Hnd1. subst. constructor.
+    + intro Hin. apply in_app_iff in Hin. destruct Hin.
+      * contradiction.
+      * apply (Hdisj a). left. reflexivity. assumption.
+    + apply IHl1; try assumption.
+      intros x Hx. apply Hdisj. right. assumption.
+Qed.
+
 (** * Section 1: Foundations - Basic Types and Definitions
     
     This section establishes the fundamental types for image processing:
@@ -2033,7 +2046,7 @@ Proof.
     - unfold incl. assumption. }
   
   (* Length of map = length of original list *)
-  rewrite length_map in Hlen.
+  rewrite map_length in Hlen.
   exact Hlen.
 Qed.
 
@@ -5191,7 +5204,7 @@ Proof.
   intros w h.
   induction h.
   - simpl. rewrite Nat.mul_0_r. reflexivity.
-  - simpl. rewrite length_app, IHh, seq_coords_row_length. 
+  - simpl. rewrite app_length, IHh, seq_coords_row_length. 
     rewrite Nat.mul_succ_r. lia.
 Qed.
 
