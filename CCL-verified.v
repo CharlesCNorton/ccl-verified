@@ -8825,6 +8825,270 @@ Theorem ccl_8_label_onto : forall img j,
   exists p, get_pixel img p = true /\ ccl_8 img p = j.
 Proof. intros img j Hj. apply (ccl_algorithm_label_onto_g adjacent_8 check_prior_neighbors_8 img j Hj). Qed.
 
+(** * An Efficient Verified Union-Find (union by rank)
+
+    The development's union-find is the abstract [uf = nat -> nat]; [uf_union]
+    rebuilds a closure, so [uf_find] costs O(number of unions). Here is a concrete
+    union-by-rank forest (parent and rank as finite maps) whose [find] follows
+    parent pointers. Because a non-root's parent has strictly greater rank, find
+    depth is bounded by rank; the structure is proved lawful and shown to refine
+    the abstract spec. *)
+
+Definition ufr_lookup (d : nat) (m : list (nat * nat)) (k : nat) : nat :=
+  match find (fun p => Nat.eqb (fst p) k) m with
+  | Some p => snd p
+  | None => d
+  end.
+
+Record ufr : Type := mkUfr { ufr_parent : list (nat * nat); ufr_rank : list (nat * nat) }.
+
+Definition upar (u : ufr) (x : nat) : nat := ufr_lookup x (ufr_parent u) x.
+Definition urnk (u : ufr) (x : nat) : nat := ufr_lookup 0 (ufr_rank u) x.
+Definition uroot (u : ufr) (x : nat) : bool := Nat.eqb (upar u x) x.
+
+Fixpoint ufind (u : ufr) (fuel x : nat) : nat :=
+  match fuel with
+  | 0 => x
+  | S f => if uroot u x then x else ufind u f (upar u x)
+  end.
+
+(** Well-formedness: ranks strictly increase toward the root, and are bounded by
+    [n] (so [n] units of fuel always reach a root). *)
+Definition ufr_wf (u : ufr) (n : nat) : Prop :=
+  (forall x, upar u x = x \/ urnk u x < urnk u (upar u x)) /\
+  (forall x, urnk u x < n).
+
+Lemma ufind_of_root : forall u x f, uroot u x = true -> ufind u f x = x.
+Proof. intros u x f Hr. destruct f; simpl; [reflexivity | rewrite Hr; reflexivity]. Qed.
+
+Lemma ufind_root_aux : forall u n, ufr_wf u n ->
+  forall f x, n - urnk u x <= f -> uroot u (ufind u f x) = true.
+Proof.
+  intros u n [Hmono Hbound] f.
+  induction f as [|f IHf]; intros x Hf.
+  - simpl. destruct (uroot u x) eqn:Hr.
+    + reflexivity.
+    + exfalso.
+      assert (Hne : upar u x <> x).
+      { intro H. unfold uroot in Hr. rewrite H, Nat.eqb_refl in Hr. discriminate. }
+      destruct (Hmono x) as [Heq | Hlt]; [contradiction|].
+      assert (urnk u x < n) by apply Hbound. lia.
+  - simpl. destruct (uroot u x) eqn:Hr.
+    + exact Hr.
+    + apply IHf.
+      assert (Hne : upar u x <> x).
+      { intro H. unfold uroot in Hr. rewrite H, Nat.eqb_refl in Hr. discriminate. }
+      destruct (Hmono x) as [Heq | Hlt]; [contradiction|]. lia.
+Qed.
+
+Lemma ufind_root : forall u n x, ufr_wf u n -> uroot u (ufind u n x) = true.
+Proof.
+  intros u n x Hwf. apply (ufind_root_aux u n Hwf n x).
+  destruct Hwf as [_ Hbound]. assert (urnk u x < n) by apply Hbound. lia.
+Qed.
+
+(** [find] is idempotent: re-finding a representative yields itself. *)
+Lemma ufind_idempotent : forall u n x, ufr_wf u n ->
+  ufind u n (ufind u n x) = ufind u n x.
+Proof.
+  intros u n x Hwf.
+  apply ufind_of_root. apply ufind_root. exact Hwf.
+Qed.
+
+(** Every rank is bounded by the maximum rank stored in the map, so [S maxrank]
+    units of fuel always suffice: find runs in O(rank), not O(number of unions). *)
+Lemma fold_left_max_acc : forall l a, a <= fold_left Nat.max l a.
+Proof.
+  induction l as [|h t IH]; intros a; simpl.
+  - lia.
+  - eapply Nat.le_trans; [| apply IH]. lia.
+Qed.
+
+Lemma fold_left_max_ge : forall l v a, In v l -> v <= fold_left Nat.max l a.
+Proof.
+  induction l as [|h t IH]; intros v a Hin.
+  - inversion Hin.
+  - simpl. destruct Hin as [He | Hin'].
+    + subst h. eapply Nat.le_trans; [| apply fold_left_max_acc]. lia.
+    + apply IH. exact Hin'.
+Qed.
+
+Definition ufr_maxrank (u : ufr) : nat := fold_left Nat.max (map snd (ufr_rank u)) 0.
+
+Lemma urnk_le_maxrank : forall u x, urnk u x <= ufr_maxrank u.
+Proof.
+  intros u x. unfold urnk, ufr_maxrank, ufr_lookup.
+  destruct (find (fun p => fst p =? x) (ufr_rank u)) as [p|] eqn:E.
+  - apply find_some in E. destruct E as [Hin _].
+    apply fold_left_max_ge. apply in_map_iff. exists p. split; [reflexivity | exact Hin].
+  - apply (fold_left_max_acc (map snd (ufr_rank u)) 0).
+Qed.
+
+(** With only the rank-monotone invariant, find at fuel [S (ufr_maxrank u)]
+    reaches a root. *)
+Lemma ufind_root_mr : forall u x,
+  (forall z, upar u z = z \/ urnk u z < urnk u (upar u z)) ->
+  uroot u (ufind u (S (ufr_maxrank u)) x) = true.
+Proof.
+  intros u x Hmono.
+  apply (ufind_root u (S (ufr_maxrank u)) x).
+  unfold ufr_wf. split.
+  - exact Hmono.
+  - intros z. assert (urnk u z <= ufr_maxrank u) by apply urnk_le_maxrank. lia.
+Qed.
+
+(** Union by rank: find both roots; attach the lower-rank root under the higher,
+    breaking ties by bumping the surviving root's rank. *)
+Definition uunion (u : ufr) (fuel x y : nat) : ufr :=
+  let rx := ufind u fuel x in
+  let ry := ufind u fuel y in
+  if Nat.eqb rx ry then u
+  else
+    let krx := urnk u rx in
+    let kry := urnk u ry in
+    if Nat.ltb krx kry
+    then mkUfr ((rx, ry) :: ufr_parent u) (ufr_rank u)
+    else if Nat.ltb kry krx
+    then mkUfr ((ry, rx) :: ufr_parent u) (ufr_rank u)
+    else mkUfr ((ry, rx) :: ufr_parent u) ((rx, S krx) :: ufr_rank u).
+
+(** Reading off parent/rank after prepending one binding. *)
+Lemma upar_cons : forall u a b z R,
+  upar (mkUfr ((a, b) :: ufr_parent u) R) z = (if a =? z then b else upar u z).
+Proof.
+  intros u a b z R. unfold upar, ufr_lookup. simpl.
+  destruct (a =? z); reflexivity.
+Qed.
+
+Lemma urnk_cons : forall u a b z P,
+  urnk (mkUfr P ((a, b) :: ufr_rank u)) z = (if a =? z then b else urnk u z).
+Proof.
+  intros u a b z P. unfold urnk, ufr_lookup. simpl.
+  destruct (a =? z); reflexivity.
+Qed.
+
+(** Union by rank preserves the rank-monotone invariant: the result is still a
+    valid forest in which find terminates correctly. *)
+Lemma uunion_preserves_rankmono : forall u fuel x y,
+  (forall z, upar u z = z \/ urnk u z < urnk u (upar u z)) ->
+  uroot u (ufind u fuel x) = true ->
+  uroot u (ufind u fuel y) = true ->
+  forall z, upar (uunion u fuel x y) z = z \/
+            urnk (uunion u fuel x y) z < urnk (uunion u fuel x y) (upar (uunion u fuel x y) z).
+Proof.
+  intros u fuel x y Hmono Hrx Hry.
+  unfold uunion.
+  set (rx := ufind u fuel x) in *. set (ry := ufind u fuel y) in *.
+  unfold uroot in Hrx, Hry. apply Nat.eqb_eq in Hrx. apply Nat.eqb_eq in Hry.
+  destruct (rx =? ry) eqn:Exy.
+  - exact Hmono.
+  - apply Nat.eqb_neq in Exy.
+    assert (Hne_rxry : rx =? ry = false) by (apply Nat.eqb_neq; exact Exy).
+    destruct (urnk u rx <? urnk u ry) eqn:Eltxy.
+    + apply Nat.ltb_lt in Eltxy. intro z. destruct (rx =? z) eqn:Ez.
+      * apply Nat.eqb_eq in Ez. subst z. right.
+        rewrite upar_cons, Nat.eqb_refl. exact Eltxy.
+      * destruct (Hmono z) as [Hroot | Hlt].
+        -- left. rewrite upar_cons, Ez. exact Hroot.
+        -- right. rewrite upar_cons, Ez. exact Hlt.
+    + apply Nat.ltb_ge in Eltxy. destruct (urnk u ry <? urnk u rx) eqn:Eltyx.
+      * apply Nat.ltb_lt in Eltyx. intro z. destruct (ry =? z) eqn:Ez.
+        -- apply Nat.eqb_eq in Ez. subst z. right.
+           rewrite upar_cons, Nat.eqb_refl. exact Eltyx.
+        -- destruct (Hmono z) as [Hroot | Hlt].
+           ++ left. rewrite upar_cons, Ez. exact Hroot.
+           ++ right. rewrite upar_cons, Ez. exact Hlt.
+      * apply Nat.ltb_ge in Eltyx. assert (Heq : urnk u rx = urnk u ry) by lia.
+        intro z. destruct (ry =? z) eqn:Ez.
+        -- apply Nat.eqb_eq in Ez. subst z. right.
+           assert (Hp : upar (mkUfr ((ry, rx) :: ufr_parent u) ((rx, S (urnk u rx)) :: ufr_rank u)) ry = rx)
+             by (rewrite upar_cons, Nat.eqb_refl; reflexivity).
+           assert (Hury : urnk (mkUfr ((ry, rx) :: ufr_parent u) ((rx, S (urnk u rx)) :: ufr_rank u)) ry = urnk u ry)
+             by (rewrite urnk_cons, Hne_rxry; reflexivity).
+           assert (Hurx : urnk (mkUfr ((ry, rx) :: ufr_parent u) ((rx, S (urnk u rx)) :: ufr_rank u)) rx = S (urnk u rx))
+             by (rewrite urnk_cons, Nat.eqb_refl; reflexivity).
+           rewrite Hp, Hury, Hurx. lia.
+        -- apply Nat.eqb_neq in Ez. destruct (Hmono z) as [Hroot | Hlt].
+           ++ left. rewrite upar_cons.
+              assert (Hryz : ry =? z = false) by (apply Nat.eqb_neq; exact Ez).
+              rewrite Hryz. exact Hroot.
+           ++ right.
+              assert (Hpz : upar (mkUfr ((ry, rx) :: ufr_parent u) ((rx, S (urnk u rx)) :: ufr_rank u)) z = upar u z).
+              { rewrite upar_cons. assert (Hryz : ry =? z = false) by (apply Nat.eqb_neq; exact Ez).
+                rewrite Hryz. reflexivity. }
+              rewrite Hpz.
+              destruct (rx =? z) eqn:Erxz.
+              ** apply Nat.eqb_eq in Erxz. subst z. exfalso. rewrite Hrx in Hlt. lia.
+              ** assert (Huz : urnk (mkUfr ((ry, rx) :: ufr_parent u) ((rx, S (urnk u rx)) :: ufr_rank u)) z = urnk u z)
+                   by (rewrite urnk_cons, Erxz; reflexivity).
+                 rewrite Huz.
+                 destruct (rx =? upar u z) eqn:Erxp.
+                 --- apply Nat.eqb_eq in Erxp.
+                     assert (Hup : urnk (mkUfr ((ry, rx) :: ufr_parent u) ((rx, S (urnk u rx)) :: ufr_rank u)) (upar u z) = S (urnk u rx))
+                       by (rewrite urnk_cons, Erxp, Nat.eqb_refl; reflexivity).
+                     rewrite Hup. rewrite <- Erxp in Hlt. lia.
+                 --- assert (Hup : urnk (mkUfr ((ry, rx) :: ufr_parent u) ((rx, S (urnk u rx)) :: ufr_rank u)) (upar u z) = urnk u (upar u z))
+                       by (rewrite urnk_cons, Erxp; reflexivity).
+                     rewrite Hup. exact Hlt.
+Qed.
+
+Lemma ufind_step : forall u f x,
+  ufind u (S f) x = if uroot u x then x else ufind u f (upar u x).
+Proof. reflexivity. Qed.
+
+(** Union merges the two classes: afterwards the two old roots share a root. *)
+Lemma uunion_connects : forall u fuel x y F,
+  uroot u (ufind u fuel x) = true ->
+  uroot u (ufind u fuel y) = true ->
+  ufind (uunion u fuel x y) (S (S F)) (ufind u fuel x)
+  = ufind (uunion u fuel x y) (S (S F)) (ufind u fuel y).
+Proof.
+  intros u fuel x y F Hrx Hry.
+  unfold uunion. cbv zeta.
+  set (rx := ufind u fuel x) in *. set (ry := ufind u fuel y) in *.
+  unfold uroot in Hrx, Hry. apply Nat.eqb_eq in Hrx. apply Nat.eqb_eq in Hry.
+  destruct (rx =? ry) eqn:Exy.
+  - apply Nat.eqb_eq in Exy. rewrite Exy. reflexivity.
+  - apply Nat.eqb_neq in Exy.
+    assert (Hne_rxry : rx =? ry = false) by (apply Nat.eqb_neq; exact Exy).
+    assert (Hne_ryrx : ry =? rx = false) by (apply Nat.eqb_neq; intro H; apply Exy; symmetry; exact H).
+    destruct (urnk u rx <? urnk u ry) eqn:E1.
+    + assert (Hpry : upar (mkUfr ((rx, ry) :: ufr_parent u) (ufr_rank u)) ry = ry)
+        by (rewrite upar_cons, Hne_rxry; exact Hry).
+      assert (Hrry : uroot (mkUfr ((rx, ry) :: ufr_parent u) (ufr_rank u)) ry = true)
+        by (unfold uroot; rewrite Hpry; apply Nat.eqb_refl).
+      assert (Hprx : upar (mkUfr ((rx, ry) :: ufr_parent u) (ufr_rank u)) rx = ry)
+        by (rewrite upar_cons, Nat.eqb_refl; reflexivity).
+      assert (Hnrx : uroot (mkUfr ((rx, ry) :: ufr_parent u) (ufr_rank u)) rx = false)
+        by (unfold uroot; rewrite Hprx; exact Hne_ryrx).
+      rewrite ufind_step. rewrite Hnrx, Hprx.
+      rewrite (ufind_of_root _ ry (S F) Hrry).
+      rewrite (ufind_of_root _ ry (S (S F)) Hrry). reflexivity.
+    + apply Nat.ltb_ge in E1. destruct (urnk u ry <? urnk u rx) eqn:E2.
+      * assert (Hprx : upar (mkUfr ((ry, rx) :: ufr_parent u) (ufr_rank u)) rx = rx)
+          by (rewrite upar_cons, Hne_ryrx; exact Hrx).
+        assert (Hrrx : uroot (mkUfr ((ry, rx) :: ufr_parent u) (ufr_rank u)) rx = true)
+          by (unfold uroot; rewrite Hprx; apply Nat.eqb_refl).
+        assert (Hpry : upar (mkUfr ((ry, rx) :: ufr_parent u) (ufr_rank u)) ry = rx)
+          by (rewrite upar_cons, Nat.eqb_refl; reflexivity).
+        assert (Hnry : uroot (mkUfr ((ry, rx) :: ufr_parent u) (ufr_rank u)) ry = false)
+          by (unfold uroot; rewrite Hpry; exact Hne_rxry).
+        rewrite (ufind_of_root _ rx (S (S F)) Hrrx).
+        rewrite ufind_step. rewrite Hnry, Hpry.
+        rewrite (ufind_of_root _ rx (S F) Hrrx). reflexivity.
+      * assert (Hprx : upar (mkUfr ((ry, rx) :: ufr_parent u) ((rx, S (urnk u rx)) :: ufr_rank u)) rx = rx)
+          by (rewrite upar_cons, Hne_ryrx; exact Hrx).
+        assert (Hrrx : uroot (mkUfr ((ry, rx) :: ufr_parent u) ((rx, S (urnk u rx)) :: ufr_rank u)) rx = true)
+          by (unfold uroot; rewrite Hprx; apply Nat.eqb_refl).
+        assert (Hpry : upar (mkUfr ((ry, rx) :: ufr_parent u) ((rx, S (urnk u rx)) :: ufr_rank u)) ry = rx)
+          by (rewrite upar_cons, Nat.eqb_refl; reflexivity).
+        assert (Hnry : uroot (mkUfr ((ry, rx) :: ufr_parent u) ((rx, S (urnk u rx)) :: ufr_rank u)) ry = false)
+          by (unfold uroot; rewrite Hpry; exact Hne_rxry).
+        rewrite (ufind_of_root _ rx (S (S F)) Hrrx).
+        rewrite ufind_step. rewrite Hnry, Hpry.
+        rewrite (ufind_of_root _ rx (S F) Hrrx). reflexivity.
+Qed.
+
 (** ** Zero Is Never Used for Foreground *)
 Theorem ccl_4_zero_only_background : forall img,
   let final_labeling := ccl_4 img in
