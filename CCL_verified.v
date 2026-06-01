@@ -7,8 +7,8 @@
 (*     Machine-checked implementation of CCL for binary images with           *)
 (*     4- and 8-adjacency. Foundation for safety-critical vision systems.     *)
 (*                                                                            *)
-(*     "The question of whether a computer can think is no more               *)
-(*      interesting than the question of whether a submarine can swim."       *)
+(*     The question of whether a computer can think is no more               *)
+(*      interesting than the question of whether a submarine can swim.       *)
 (*                                              - Edsger Dijkstra             *)
 (*                                                                            *)
 (*     Author: Charles C. Norton                                              *)
@@ -17,14 +17,14 @@
 (******************************************************************************)
 
 
-Require Import Coq.Init.Prelude.
-Require Import Coq.Init.Nat.
-Require Import Coq.Arith.Arith.
-Require Import Coq.Bool.Bool.
-Require Import Coq.Lists.List.
+From Stdlib Require Import Init.Prelude.
+From Stdlib Require Import Init.Nat.
+From Stdlib Require Import Arith.Arith.
+From Stdlib Require Import Bool.Bool.
+From Stdlib Require Import Lists.List.
 Import ListNotations.
-Require Import Coq.Arith.PeanoNat.
-Require Import Coq.micromega.Lia.
+From Stdlib Require Import Arith.PeanoNat.
+From Stdlib Require Import micromega.Lia.
 
 Open Scope nat_scope.
 
@@ -2046,7 +2046,7 @@ Proof.
     - unfold incl. assumption. }
   
   (* Length of map = length of original list *)
-  rewrite map_length in Hlen.
+  rewrite length_map in Hlen.
   exact Hlen.
 Qed.
 
@@ -3091,6 +3091,86 @@ Proof.
       rewrite H1, H2.
       rewrite Hl1y, Hl2y.
       reflexivity.
+Qed.
+
+(** When [record_adjacency u m l] makes [a] and [b] equivalent without their
+    having been equivalent in [u], each of [a] and [b] must already be
+    equivalent in [u] to one of the two merged labels [m] or [l]. *)
+Lemma record_adjacency_same_set_cases : forall u m l a b,
+  uf_same_set (record_adjacency u m l) a b = true ->
+  uf_same_set u a b = true \/
+  ((uf_same_set u a m = true \/ uf_same_set u a l = true) /\
+   (uf_same_set u b m = true \/ uf_same_set u b l = true)).
+Proof.
+  intros u m l a b H.
+  destruct (uf_same_set u a b) eqn:Hab.
+  - left. reflexivity.
+  - right.
+    unfold record_adjacency in H.
+    destruct (negb (m =? 0) && negb (l =? 0)) eqn:Hnz.
+    + destruct (m =? l) eqn:Hml.
+      * rewrite Hab in H. discriminate.
+      * apply (uf_union_creates_equiv_characterization u a b m l Hab) in H.
+        destruct H as [Ha Hb].
+        split.
+        -- destruct Ha as [Ha | Ha]; [left | right];
+           unfold uf_same_set; apply Nat.eqb_eq; exact Ha.
+        -- destruct Hb as [Hb | Hb]; [left | right];
+           unfold uf_same_set; apply Nat.eqb_eq; exact Hb.
+    + rewrite Hab in H. discriminate.
+Qed.
+
+(** Equivalences to [m] or to a member of [rest] holding in [record_adjacency u m l0]
+    descend to equivalences in [u] to [m] or to a member of [l0 :: rest]. *)
+Lemma record_adjacency_touch_push : forall u m l0 rest a,
+  (uf_same_set (record_adjacency u m l0) a m = true \/
+   (exists l, In l rest /\ uf_same_set (record_adjacency u m l0) a l = true)) ->
+  (uf_same_set u a m = true \/
+   (exists l, In l (l0 :: rest) /\ uf_same_set u a l = true)).
+Proof.
+  intros u m l0 rest a H.
+  destruct H as [Hm | [l [Hin Hl]]].
+  - apply record_adjacency_same_set_cases in Hm.
+    destruct Hm as [Hm | [Ha _]].
+    + left. exact Hm.
+    + destruct Ha as [Ha | Ha].
+      * left. exact Ha.
+      * right. exists l0. split; [left; reflexivity | exact Ha].
+  - apply record_adjacency_same_set_cases in Hl.
+    destruct Hl as [Hl | [Ha _]].
+    + right. exists l. split; [right; exact Hin | exact Hl].
+    + destruct Ha as [Ha | Ha].
+      * left. exact Ha.
+      * right. exists l0. split; [left; reflexivity | exact Ha].
+Qed.
+
+(** Characterisation of equivalences produced by folding [record_adjacency] with
+    a fixed first label [m] over [ls]: every resulting equivalence is either
+    inherited from [u], or both endpoints already touch [m] or some member of
+    [ls] in [u]. This is the converse-direction companion to
+    [fold_record_adjacency_creates]. *)
+Lemma fold_record_adjacency_same_set_cases : forall ls m u a b,
+  uf_same_set (fold_left (fun u' l => record_adjacency u' m l) ls u) a b = true ->
+  uf_same_set u a b = true \/
+  ((uf_same_set u a m = true \/ (exists l, In l ls /\ uf_same_set u a l = true)) /\
+   (uf_same_set u b m = true \/ (exists l, In l ls /\ uf_same_set u b l = true))).
+Proof.
+  induction ls as [|l0 rest IH]; intros m u a b H.
+  - simpl in H. left. exact H.
+  - simpl in H.
+    specialize (IH m (record_adjacency u m l0) a b H).
+    destruct IH as [IHsame | [IHa IHb]].
+    + apply record_adjacency_same_set_cases in IHsame.
+      destruct IHsame as [Hsame | [Ha Hb]].
+      * left. exact Hsame.
+      * right. split.
+        -- destruct Ha as [Ha | Ha];
+           [left; exact Ha | right; exists l0; split; [left; reflexivity | exact Ha]].
+        -- destruct Hb as [Hb | Hb];
+           [left; exact Hb | right; exists l0; split; [left; reflexivity | exact Hb]].
+    + right. split.
+      * apply (record_adjacency_touch_push u m l0 rest a). exact IHa.
+      * apply (record_adjacency_touch_push u m l0 rest b). exact IHb.
 Qed.
 
 (** 4. Direct computation of find after union *)
@@ -5204,7 +5284,7 @@ Proof.
   intros w h.
   induction h.
   - simpl. rewrite Nat.mul_0_r. reflexivity.
-  - simpl. rewrite app_length, IHh, seq_coords_row_length. 
+  - simpl. rewrite length_app, IHh, seq_coords_row_length. 
     rewrite Nat.mul_succ_r. lia.
 Qed.
 
@@ -7506,6 +7586,446 @@ Proof.
   - unfold s. apply ccl_pass_idempotent.
 Qed.
 
+(** * Completeness: Same Label Implies Connected
+
+    The soundness bridge ([connected_pixels_same_label]) shows connected pixels
+    share a label. This section proves the converse: pixels that end with the
+    same positive label are genuinely connected. The heart is an invariant,
+    threaded through the raster scan, stating that union-find equivalence among
+    processed foreground pixels entails connectivity. *)
+
+(** The running minimum of a non-empty list is one of its elements. *)
+Lemma fold_min_in : forall ls l, In (fold_left Nat.min ls l) (l :: ls).
+Proof.
+  induction ls as [|a rest IH]; intros l.
+  - left. reflexivity.
+  - replace (fold_left Nat.min (a :: rest) l)
+      with (fold_left Nat.min rest (Nat.min l a)) by reflexivity.
+    destruct (IH (Nat.min l a)) as [Heq | Hin].
+    + rewrite <- Heq. destruct (Nat.min_dec l a) as [Hm | Hm]; rewrite Hm.
+      * left. reflexivity.
+      * right. left. reflexivity.
+    + right. right. exact Hin.
+Qed.
+
+(** A prior neighbour of [c] lies in the scanned prefix that precedes [c]. *)
+Lemma neighbor_in_prefix : forall img pre c todo p,
+  all_coords img = pre ++ c :: todo ->
+  In p (check_prior_neighbors_4 img c) ->
+  In p pre.
+Proof.
+  intros img pre c todo p Hsplit Hin.
+  assert (Hin' := Hin).
+  apply check_prior_neighbors_4_characterization in Hin'.
+  destruct Hin' as [Hpix [Hadj Hbefore]].
+  assert (Hbp: in_bounds img p = true) by (apply foreground_in_bounds; exact Hpix).
+  assert (Hbc: in_bounds img c = true).
+  { apply all_coords_sound. rewrite Hsplit. apply in_app_iff. right. left. reflexivity. }
+  assert (Hnotin: ~ In c pre).
+  { assert (HND: NoDup (all_coords img)) by apply all_coords_NoDup.
+    rewrite Hsplit in HND. apply NoDup_remove_2 in HND.
+    intro Hc. apply HND. apply in_app_iff. left. exact Hc. }
+  apply (raster_lt_in_prefix img p c pre todo Hbp Hbc Hbefore Hsplit Hnotin).
+Qed.
+
+(** If a processed foreground pixel [a] is union-find equivalent to the label of
+    some prior neighbour of [c], then [a] is connected to [c]. *)
+Lemma prefix_touch_connected_to_c :
+  forall img pre c todo a (s_pre : ccl_state),
+  all_coords img = pre ++ c :: todo ->
+  get_pixel img c = true ->
+  (forall x y, In x pre -> In y pre ->
+     get_pixel img x = true -> get_pixel img y = true ->
+     uf_same_set (equiv s_pre) (labels s_pre x) (labels s_pre y) = true ->
+     connected img adjacent_4 x y) ->
+  In a pre -> get_pixel img a = true ->
+  (exists p, In p (check_prior_neighbors_4 img c) /\
+             uf_same_set (equiv s_pre) (labels s_pre a) (labels s_pre p) = true) ->
+  connected img adjacent_4 a c.
+Proof.
+  intros img pre c todo a s_pre Hsplit Hc IH Hain Hafg [p [Hpin Hsame]].
+  assert (Hppre: In p pre) by (apply (neighbor_in_prefix img pre c todo p Hsplit Hpin)).
+  apply check_prior_neighbors_4_characterization in Hpin.
+  destruct Hpin as [Hpfg [Hpadj Hpbefore]].
+  assert (Hap: connected img adjacent_4 a p)
+    by (apply (IH a p Hain Hppre Hafg Hpfg Hsame)).
+  assert (Hpc: connected img adjacent_4 p c)
+    by (apply adjacent_connected; [exact Hpfg | exact Hc | exact Hpadj]).
+  apply (connected_trans img adjacent_4 a p c Hap Hpc).
+Qed.
+
+(** A label present in the positive-neighbour list is the label of an actual
+    prior neighbour. *)
+Lemma positive_label_witness : forall img c s_pre l rest ll,
+  filter (fun z => negb (z =? 0)) (map (labels s_pre) (check_prior_neighbors_4 img c)) = l :: rest ->
+  In ll (l :: rest) ->
+  exists p, In p (check_prior_neighbors_4 img c) /\ labels s_pre p = ll.
+Proof.
+  intros img c s_pre l rest ll Hfilter Hin.
+  assert (Hinf : In ll (filter (fun z => negb (z =? 0)) (map (labels s_pre) (check_prior_neighbors_4 img c)))).
+  { rewrite Hfilter. exact Hin. }
+  apply filter_In in Hinf. destruct Hinf as [Hmap _].
+  apply in_map_iff in Hmap. destruct Hmap as [p [Hlp Hpin]].
+  exists p. split; [exact Hpin | exact Hlp].
+Qed.
+
+(** A label that touches [min] or a positive neighbour label is union-find
+    equivalent to the label of some prior neighbour. *)
+Lemma touch_to_neighbor : forall img c s_pre l rest X,
+  filter (fun z => negb (z =? 0)) (map (labels s_pre) (check_prior_neighbors_4 img c)) = l :: rest ->
+  (uf_same_set (equiv s_pre) X (fold_left Nat.min rest l) = true \/
+   (exists ll, In ll (l :: rest) /\ uf_same_set (equiv s_pre) X ll = true)) ->
+  exists p, In p (check_prior_neighbors_4 img c) /\
+            uf_same_set (equiv s_pre) X (labels s_pre p) = true.
+Proof.
+  intros img c s_pre l rest X Hfilter Htouch.
+  destruct Htouch as [Hmin | [ll [Hll Hsame]]].
+  - destruct (positive_label_witness img c s_pre l rest (fold_left Nat.min rest l)
+               Hfilter (fold_min_in rest l)) as [p [Hpin Hlp]].
+    exists p. split; [exact Hpin | rewrite Hlp; exact Hmin].
+  - destruct (positive_label_witness img c s_pre l rest ll Hfilter Hll) as [p [Hpin Hlp]].
+    exists p. split; [exact Hpin | rewrite Hlp; exact Hsame].
+Qed.
+
+(** Projection lemmas reading off [process_pixel]'s result in each branch. *)
+Lemma process_pixel_equiv_pos : forall img s c l rest,
+  get_pixel img c = true ->
+  filter (fun z => negb (z =? 0)) (map (labels s) (check_prior_neighbors_4 img c)) = l :: rest ->
+  equiv (process_pixel img adjacent_4 check_prior_neighbors_4 s c)
+    = fold_left (fun u l' => record_adjacency u (fold_left Nat.min rest l) l') (l :: rest) (equiv s).
+Proof.
+  intros img s c l rest Hpix Hfilter.
+  unfold process_pixel. rewrite Hpix. cbv zeta. rewrite Hfilter. reflexivity.
+Qed.
+
+Lemma process_pixel_labels_at_c_pos : forall img s c l rest,
+  get_pixel img c = true ->
+  filter (fun z => negb (z =? 0)) (map (labels s) (check_prior_neighbors_4 img c)) = l :: rest ->
+  labels (process_pixel img adjacent_4 check_prior_neighbors_4 s c) c = fold_left Nat.min rest l.
+Proof.
+  intros img s c l rest Hpix Hfilter.
+  unfold process_pixel. rewrite Hpix. cbv zeta. rewrite Hfilter.
+  cbn [labels]. rewrite coord_eqb_refl. reflexivity.
+Qed.
+
+Lemma process_pixel_equiv_nopos : forall img s c,
+  get_pixel img c = true ->
+  filter (fun z => negb (z =? 0)) (map (labels s) (check_prior_neighbors_4 img c)) = [] ->
+  equiv (process_pixel img adjacent_4 check_prior_neighbors_4 s c) = equiv s.
+Proof.
+  intros img s c Hpix Hfilter.
+  unfold process_pixel. rewrite Hpix. cbv zeta. rewrite Hfilter. reflexivity.
+Qed.
+
+Lemma process_pixel_labels_at_c_nopos : forall img s c,
+  get_pixel img c = true ->
+  filter (fun z => negb (z =? 0)) (map (labels s) (check_prior_neighbors_4 img c)) = [] ->
+  labels (process_pixel img adjacent_4 check_prior_neighbors_4 s c) c = next_label s.
+Proof.
+  intros img s c Hpix Hfilter.
+  unfold process_pixel. rewrite Hpix. cbv zeta. rewrite Hfilter.
+  cbn [labels]. rewrite coord_eqb_refl. reflexivity.
+Qed.
+
+(** The key inductive step: processing one more pixel [c] (the last of the
+    scanned prefix) preserves the connectivity invariant. *)
+Lemma conn_inv_step :
+  forall img pre c todo s_pre,
+  all_coords img = pre ++ c :: todo ->
+  s_pre = fold_left (process_pixel img adjacent_4 check_prior_neighbors_4) pre initial_state ->
+  (forall x y, In x pre -> In y pre ->
+     get_pixel img x = true -> get_pixel img y = true ->
+     uf_same_set (equiv s_pre) (labels s_pre x) (labels s_pre y) = true ->
+     connected img adjacent_4 x y) ->
+  forall a b,
+  In a (pre ++ [c]) -> In b (pre ++ [c]) ->
+  get_pixel img a = true -> get_pixel img b = true ->
+  uf_same_set (equiv (process_pixel img adjacent_4 check_prior_neighbors_4 s_pre c))
+              (labels (process_pixel img adjacent_4 check_prior_neighbors_4 s_pre c) a)
+              (labels (process_pixel img adjacent_4 check_prior_neighbors_4 s_pre c) b) = true ->
+  connected img adjacent_4 a b.
+Proof.
+  intros img pre c todo s_pre Hsplit Hs_pre IH a b Hain Hbin Hafg Hbfg Huf.
+  assert (Hcnotin : ~ In c pre).
+  { assert (HND : NoDup (all_coords img)) by apply all_coords_NoDup.
+    rewrite Hsplit in HND. apply NoDup_remove_2 in HND.
+    intro Hc. apply HND. apply in_app_iff. left. exact Hc. }
+  assert (Hane : In a pre \/ a = c).
+  { apply in_app_iff in Hain. destruct Hain as [H|[H|[]]]; [left; exact H | right; symmetry; exact H]. }
+  assert (Hbne : In b pre \/ b = c).
+  { apply in_app_iff in Hbin. destruct Hbin as [H|[H|[]]]; [left; exact H | right; symmetry; exact H]. }
+  assert (Hane_neq : forall x, In x pre -> c <> x).
+  { intros x Hx Heq. subst x. contradiction. }
+  destruct (get_pixel img c) eqn:Hpixc.
+  - destruct (filter (fun z => negb (z =? 0)) (map (labels s_pre) (check_prior_neighbors_4 img c)))
+      as [|l rest] eqn:Hfilter.
+    + (* fresh-label branch *)
+      rewrite (process_pixel_equiv_nopos img s_pre c Hpixc Hfilter) in Huf.
+      assert (Hbnd : forall m, m <= next_label s_pre - 1 -> uf_find (equiv s_pre) m <= next_label s_pre - 1).
+      { rewrite Hs_pre. exact (proj1 (fold_process_preserves_uf_find_bound img adjacent_4 check_prior_neighbors_4 pre initial_state
+            initial_state_next_label_positive (proj1 initial_state_bounds) (proj2 initial_state_both_invariants) (proj2 initial_state_bounds))). }
+      assert (Hunused : forall m, m >= next_label s_pre -> uf_find (equiv s_pre) m = m).
+      { rewrite Hs_pre. exact (proj2 (fold_process_preserves_uf_find_bound img adjacent_4 check_prior_neighbors_4 pre initial_state
+            initial_state_next_label_positive (proj1 initial_state_bounds) (proj2 initial_state_both_invariants) (proj2 initial_state_bounds))). }
+      assert (Hlblt : forall x, labels s_pre x < next_label s_pre).
+      { rewrite Hs_pre. exact (fold_process_label_bounds img adjacent_4 check_prior_neighbors_4 pre initial_state initial_state_labels_bounded). }
+      destruct Hane as [Hapre | Hac]; destruct Hbne as [Hbpre | Hbc].
+      * rewrite (process_pixel_labels_unchanged img adjacent_4 check_prior_neighbors_4 s_pre c a (Hane_neq a Hapre)) in Huf.
+        rewrite (process_pixel_labels_unchanged img adjacent_4 check_prior_neighbors_4 s_pre c b (Hane_neq b Hbpre)) in Huf.
+        apply (IH a b Hapre Hbpre Hafg Hbfg Huf).
+      * subst b.
+        rewrite (process_pixel_labels_unchanged img adjacent_4 check_prior_neighbors_4 s_pre c a (Hane_neq a Hapre)) in Huf.
+        rewrite (process_pixel_labels_at_c_nopos img s_pre c Hpixc Hfilter) in Huf.
+        exfalso. unfold uf_same_set in Huf. apply Nat.eqb_eq in Huf.
+        assert (Hla := Hlblt a).
+        assert (Hfa : uf_find (equiv s_pre) (labels s_pre a) <= next_label s_pre - 1) by (apply Hbnd; lia).
+        assert (Hfn : uf_find (equiv s_pre) (next_label s_pre) = next_label s_pre) by (apply Hunused; lia).
+        rewrite Hfn in Huf. lia.
+      * subst a.
+        rewrite (process_pixel_labels_unchanged img adjacent_4 check_prior_neighbors_4 s_pre c b (Hane_neq b Hbpre)) in Huf.
+        rewrite (process_pixel_labels_at_c_nopos img s_pre c Hpixc Hfilter) in Huf.
+        exfalso. unfold uf_same_set in Huf. apply Nat.eqb_eq in Huf.
+        assert (Hlb := Hlblt b).
+        assert (Hfb : uf_find (equiv s_pre) (labels s_pre b) <= next_label s_pre - 1) by (apply Hbnd; lia).
+        assert (Hfn : uf_find (equiv s_pre) (next_label s_pre) = next_label s_pre) by (apply Hunused; lia).
+        rewrite Hfn in Huf. lia.
+      * subst a b. apply connected_refl. exact Hpixc.
+    + (* positive-neighbour branch *)
+      rewrite (process_pixel_equiv_pos img s_pre c l rest Hpixc Hfilter) in Huf.
+      apply fold_record_adjacency_same_set_cases in Huf.
+      destruct Huf as [HL | [HRa HRb]].
+      * destruct Hane as [Hapre | Hac]; destruct Hbne as [Hbpre | Hbc].
+        -- rewrite (process_pixel_labels_unchanged img adjacent_4 check_prior_neighbors_4 s_pre c a (Hane_neq a Hapre)) in HL.
+           rewrite (process_pixel_labels_unchanged img adjacent_4 check_prior_neighbors_4 s_pre c b (Hane_neq b Hbpre)) in HL.
+           apply (IH a b Hapre Hbpre Hafg Hbfg HL).
+        -- subst b.
+           rewrite (process_pixel_labels_unchanged img adjacent_4 check_prior_neighbors_4 s_pre c a (Hane_neq a Hapre)) in HL.
+           rewrite (process_pixel_labels_at_c_pos img s_pre c l rest Hpixc Hfilter) in HL.
+           apply (prefix_touch_connected_to_c img pre c todo a s_pre Hsplit Hpixc IH Hapre Hafg).
+           apply (touch_to_neighbor img c s_pre l rest (labels s_pre a) Hfilter).
+           left. exact HL.
+        -- subst a.
+           rewrite (process_pixel_labels_unchanged img adjacent_4 check_prior_neighbors_4 s_pre c b (Hane_neq b Hbpre)) in HL.
+           rewrite (process_pixel_labels_at_c_pos img s_pre c l rest Hpixc Hfilter) in HL.
+           assert (Hbc2 : connected img adjacent_4 b c).
+           { apply (prefix_touch_connected_to_c img pre c todo b s_pre Hsplit Hpixc IH Hbpre Hbfg).
+             apply (touch_to_neighbor img c s_pre l rest (labels s_pre b) Hfilter).
+             left. rewrite uf_same_set_sym. exact HL. }
+           apply (connected_sym img adjacent_4 b c adjacent_4_sym Hbc2).
+        -- subst a b. apply connected_refl. exact Hpixc.
+      * assert (Hac2 : connected img adjacent_4 a c).
+        { destruct Hane as [Hapre | Hac].
+          - rewrite (process_pixel_labels_unchanged img adjacent_4 check_prior_neighbors_4 s_pre c a (Hane_neq a Hapre)) in HRa.
+            apply (prefix_touch_connected_to_c img pre c todo a s_pre Hsplit Hpixc IH Hapre Hafg).
+            apply (touch_to_neighbor img c s_pre l rest (labels s_pre a) Hfilter). exact HRa.
+          - subst a. apply connected_refl. exact Hpixc. }
+        assert (Hbc2 : connected img adjacent_4 b c).
+        { destruct Hbne as [Hbpre | Hbc].
+          - rewrite (process_pixel_labels_unchanged img adjacent_4 check_prior_neighbors_4 s_pre c b (Hane_neq b Hbpre)) in HRb.
+            apply (prefix_touch_connected_to_c img pre c todo b s_pre Hsplit Hpixc IH Hbpre Hbfg).
+            apply (touch_to_neighbor img c s_pre l rest (labels s_pre b) Hfilter). exact HRb.
+          - subst b. apply connected_refl. exact Hpixc. }
+        apply (connected_trans img adjacent_4 a c b Hac2).
+        apply (connected_sym img adjacent_4 b c adjacent_4_sym Hbc2).
+  - rewrite (process_pixel_background_unchanged img adjacent_4 check_prior_neighbors_4 s_pre c Hpixc) in Huf.
+    destruct Hane as [Hapre | Hac]; [| subst a; rewrite Hpixc in Hafg; discriminate].
+    destruct Hbne as [Hbpre | Hbc]; [| subst b; rewrite Hpixc in Hbfg; discriminate].
+    apply (IH a b Hapre Hbpre Hafg Hbfg Huf).
+Qed.
+
+(** The connectivity invariant holds after scanning any prefix of [all_coords].
+    Proved by induction on the prefix from the right, peeling the last pixel and
+    discharging it with [conn_inv_step]. *)
+Lemma ccl_pass_conn_prefix : forall img done,
+  (exists todo, all_coords img = done ++ todo) ->
+  forall a b,
+     In a done -> In b done ->
+     get_pixel img a = true -> get_pixel img b = true ->
+     uf_same_set (equiv (fold_left (process_pixel img adjacent_4 check_prior_neighbors_4) done initial_state))
+                 (labels (fold_left (process_pixel img adjacent_4 check_prior_neighbors_4) done initial_state) a)
+                 (labels (fold_left (process_pixel img adjacent_4 check_prior_neighbors_4) done initial_state) b) = true ->
+     connected img adjacent_4 a b.
+Proof.
+  intros img done.
+  induction done as [| c pre IHrev] using rev_ind.
+  - intros _ a b [].
+  - intros [todo Hsplit0] a b Hain Hbin Hafg Hbfg Huf.
+    assert (Hsplit : all_coords img = pre ++ c :: todo).
+    { rewrite Hsplit0. rewrite <- app_assoc. reflexivity. }
+    assert (IHpre : forall x y, In x pre -> In y pre ->
+              get_pixel img x = true -> get_pixel img y = true ->
+              uf_same_set (equiv (fold_left (process_pixel img adjacent_4 check_prior_neighbors_4) pre initial_state))
+                          (labels (fold_left (process_pixel img adjacent_4 check_prior_neighbors_4) pre initial_state) x)
+                          (labels (fold_left (process_pixel img adjacent_4 check_prior_neighbors_4) pre initial_state) y) = true ->
+              connected img adjacent_4 x y).
+    { apply IHrev. exists (c :: todo). exact Hsplit. }
+    rewrite fold_left_app in Huf. cbn [fold_left] in Huf.
+    exact (conn_inv_step img pre c todo
+             (fold_left (process_pixel img adjacent_4 check_prior_neighbors_4) pre initial_state)
+             Hsplit eq_refl IHpre a b Hain Hbin Hafg Hbfg Huf).
+Qed.
+
+(** Completeness at the pass level: foreground pixels whose provisional labels
+    are union-find equivalent are connected. *)
+Lemma ccl_pass_uf_implies_connected : forall img a b,
+  get_pixel img a = true -> get_pixel img b = true ->
+  uf_same_set (equiv (ccl_pass img adjacent_4 check_prior_neighbors_4))
+              (labels (ccl_pass img adjacent_4 check_prior_neighbors_4) a)
+              (labels (ccl_pass img adjacent_4 check_prior_neighbors_4) b) = true ->
+  connected img adjacent_4 a b.
+Proof.
+  intros img a b Hafg Hbfg Huf.
+  apply (ccl_pass_conn_prefix img (all_coords img)).
+  - exists []. rewrite app_nil_r. reflexivity.
+  - apply all_coords_complete. apply foreground_in_bounds. exact Hafg.
+  - apply all_coords_complete. apply foreground_in_bounds. exact Hbfg.
+  - exact Hafg.
+  - exact Hbfg.
+  - exact Huf.
+Qed.
+
+(** [assign_compact] returns one plus the index at which the representative of
+    [l] occurs in [reps]; in particular a positive result pins down that index. *)
+Lemma assign_compact_spec : forall u reps next l v,
+  (fix assign_compact (reps : list nat) (next label : nat) {struct reps} : nat :=
+     match reps with
+     | [] => 0
+     | r :: rest =>
+         if uf_find u label =? r then next
+         else assign_compact rest (S next) label
+     end) reps next l = v ->
+  v <> 0 ->
+  exists k, nth_error reps k = Some (uf_find u l) /\ v = next + k.
+Proof.
+  intros u reps. induction reps as [|r rest IH]; intros next l v Hv Hnz.
+  - simpl in Hv. exfalso. lia.
+  - simpl in Hv.
+    destruct (uf_find u l =? r) eqn:E.
+    + apply Nat.eqb_eq in E. exists 0. split.
+      * simpl. rewrite E. reflexivity.
+      * lia.
+    + destruct (IH (S next) l v Hv Hnz) as [k [Hnth Hvk]].
+      exists (S k). split.
+      * simpl. exact Hnth.
+      * lia.
+Qed.
+
+(** A positive compacted label pins down the position of [l]'s representative. *)
+Lemma build_label_map_spec : forall u max l v,
+  l <> 0 -> build_label_map u max l = v -> v <> 0 ->
+  exists k, nth_error (filter (fun x => is_representative u x) (seq 1 max)) k = Some (uf_find u l)
+            /\ v = 1 + k.
+Proof.
+  intros u max l v Hl Hbuild Hnz.
+  unfold build_label_map in Hbuild. cbv zeta beta in Hbuild.
+  destruct (l =? 0) eqn:E.
+  - apply Nat.eqb_eq in E. contradiction.
+  - exact (assign_compact_spec u (filter (fun x => is_representative u x) (seq 1 max)) 1 l v Hbuild Hnz).
+Qed.
+
+(** Label compaction is injective on representatives: equal positive compacted
+    labels force equal union-find roots. *)
+Lemma build_label_map_inj_rep : forall u max l1 l2,
+  build_label_map u max l1 = build_label_map u max l2 ->
+  build_label_map u max l1 <> 0 ->
+  uf_find u l1 = uf_find u l2.
+Proof.
+  intros u max l1 l2 Heq Hnz.
+  destruct (l1 =? 0) eqn:E1.
+  - apply Nat.eqb_eq in E1. subst l1. rewrite build_label_map_zero in Hnz.
+    exfalso. apply Hnz. reflexivity.
+  - destruct (l2 =? 0) eqn:E2.
+    + apply Nat.eqb_eq in E2. subst l2. rewrite build_label_map_zero in Heq.
+      rewrite Heq in Hnz. exfalso. apply Hnz. reflexivity.
+    + apply Nat.eqb_neq in E1. apply Nat.eqb_neq in E2.
+      destruct (build_label_map_spec u max l1 (build_label_map u max l1) E1 eq_refl Hnz) as [k1 [Hnth1 Hk1]].
+      assert (Hnz2 : build_label_map u max l2 <> 0) by (rewrite <- Heq; exact Hnz).
+      destruct (build_label_map_spec u max l2 (build_label_map u max l2) E2 eq_refl Hnz2) as [k2 [Hnth2 Hk2]].
+      rewrite Heq in Hk1.
+      assert (k1 = k2) by lia. subst k2.
+      rewrite Hnth1 in Hnth2. injection Hnth2 as Hinj. exact Hinj.
+Qed.
+
+(** ** COMPLETENESS THEOREM: Same Label Implies Connected
+
+    Pixels assigned the same positive final label by [ccl_4] are connected. With
+    the soundness bridge this makes [ccl_4] both sound and complete. *)
+Theorem ccl_4_complete : forall img c1 c2,
+  ccl_4 img c1 = ccl_4 img c2 ->
+  ccl_4 img c1 > 0 ->
+  connected img adjacent_4 c1 c2.
+Proof.
+  intros img c1 c2 Heq Hpos.
+  assert (Hfg1 : get_pixel img c1 = true).
+  { destruct (get_pixel img c1) eqn:E; [reflexivity|].
+    rewrite (ccl_4_background img c1 E) in Hpos. lia. }
+  assert (Hfg2 : get_pixel img c2 = true).
+  { destruct (get_pixel img c2) eqn:E; [reflexivity|].
+    rewrite (ccl_4_background img c2 E) in Heq. rewrite Heq in Hpos. lia. }
+  apply ccl_pass_uf_implies_connected; [exact Hfg1 | exact Hfg2 |].
+  unfold uf_same_set. apply Nat.eqb_eq.
+  unfold ccl_4, ccl_algorithm, compact_labels, resolve_labels in Heq, Hpos.
+  cbv zeta in Heq, Hpos.
+  pose proof (ccl_pass_idempotent img adjacent_4 check_prior_neighbors_4
+                (labels (ccl_pass img adjacent_4 check_prior_neighbors_4) c1)) as Hid1.
+  pose proof (ccl_pass_idempotent img adjacent_4 check_prior_neighbors_4
+                (labels (ccl_pass img adjacent_4 check_prior_neighbors_4) c2)) as Hid2.
+  cbv zeta in Hid1, Hid2.
+  rewrite <- Hid1, <- Hid2.
+  apply (build_label_map_inj_rep _ _ _ _ Heq). lia.
+Qed.
+
+(** ** CORRECTNESS: [ccl_4] satisfies the full [correct_labeling] specification. *)
+Theorem ccl_4_correct : forall img, correct_labeling img adjacent_4 (ccl_4 img).
+Proof.
+  intro img. constructor.
+  - exact (ccl_4_background img).
+  - exact (ccl_4_foreground_positive img).
+  - exact (connected_pixels_same_label img).
+  - exact (ccl_4_complete img).
+Qed.
+
+(** ** Component count is bounded by the number of foreground pixels.
+
+    A direct consequence of [ccl_4_correct]: the verified labeling has no more
+    components than it has foreground pixels. *)
+Theorem ccl_4_num_components_bound : forall img max,
+  (forall c, ccl_4 img c <= max) ->
+  num_components img (ccl_4 img) max <=
+  length (filter (fun c => get_pixel img c) (all_coords img)).
+Proof.
+  intros img max Hbound.
+  apply (component_count_bound img adjacent_4 (ccl_4 img) max).
+  - apply ccl_4_correct.
+  - exact Hbound.
+Qed.
+
+(** Compacted labels never exceed the number of representatives. *)
+Lemma build_label_map_le : forall u max l,
+  build_label_map u max l <= length (filter (fun x => is_representative u x) (seq 1 max)).
+Proof.
+  intros u max l.
+  destruct (build_label_map u max l) eqn:Ev.
+  - lia.
+  - destruct (Nat.eq_dec l 0) as [Hl0 | Hl0].
+    + subst l. rewrite build_label_map_zero in Ev. discriminate.
+    + destruct (build_label_map_spec u max l (S n) Hl0 Ev ltac:(discriminate)) as [k [Hnth Hk]].
+      assert (Hklt : k < length (filter (fun x => is_representative u x) (seq 1 max))).
+      { apply nth_error_Some. rewrite Hnth. discriminate. }
+      lia.
+Qed.
+
+(** [ccl_4]'s labels are compact: bounded by the number of components. *)
+Theorem ccl_4_label_le_components : forall img c,
+  ccl_4 img c <=
+  length (filter (fun x => is_representative (equiv (ccl_pass img adjacent_4 check_prior_neighbors_4)) x)
+                 (seq 1 (next_label (ccl_pass img adjacent_4 check_prior_neighbors_4) - 1))).
+Proof.
+  intros img c.
+  unfold ccl_4, ccl_algorithm, compact_labels. cbv zeta.
+  apply build_label_map_le.
+Qed.
+
 (** ** Zero Is Never Used for Foreground *)
 Theorem ccl_4_zero_only_background : forall img,
   let final_labeling := ccl_4 img in
@@ -7745,8 +8265,8 @@ Proof.
   apply ccl_4_main_correctness.
 Qed.
 
-Require Import Coq.Strings.String.
-Require Import Coq.Strings.Ascii.
+From Stdlib Require Import Strings.String.
+From Stdlib Require Import Strings.Ascii.
 Open Scope string_scope.
 
 (** ** Computational Testing Infrastructure *)
@@ -7998,9 +8518,9 @@ Proof.
 Qed.
 (** ** USER INTERFACE: Plug in Your Own Images for Analysis *)
 
-Require Import Coq.Strings.String.
-Require Import Coq.Strings.Ascii.
-Require Import Coq.Lists.List.
+From Stdlib Require Import Strings.String.
+From Stdlib Require Import Strings.Ascii.
+From Stdlib Require Import Lists.List.
 Import ListNotations.
 
 (** ASCII comparison function *)
@@ -8068,7 +8588,7 @@ Definition count_unique_labels (img : image) (labeling : labeling) : nat :=
 (** Or better yet, just use the existing num_components *)
 Definition analyze_components (img : image) : nat :=
   let s := ccl_pass img adjacent_4 check_prior_neighbors_4 in
-  num_components img (labels s) (next_label s - 1).
+  num_components img (ccl_4 img) (next_label s - 1).
 
 (** Get component size *)
 Definition component_size (img : image) (labeling : labeling) (label : nat) : nat :=
@@ -8286,7 +8806,7 @@ Definition zipper_pattern : image :=
     (* Top row: every even x *)
     | (0,0) | (2,0) | (4,0) | (6,0) | (8,0) | (10,0) | (12,0) | (14,0) | (16,0) | (18,0) => true
     (* Middle row: every x *)
-    | (x,1) => true  (* This connects ALL top pixels! *)
+    | (_, 1) => true  (* This connects ALL top pixels! *)
     (* Bottom row: every odd x *)
     | (1,2) | (3,2) | (5,2) | (7,2) | (9,2) | (11,2) | (13,2) | (15,2) | (17,2) | (19,2) => true
     | _ => false
@@ -8324,8 +8844,8 @@ Qed.
     Preserves all verified properties through exact semantic extraction.
 *)
 
-Require Import ExtrOcamlBasic.
-Require Import ExtrOcamlString.
+From Stdlib Require Import ExtrOcamlBasic.
+From Stdlib Require Import ExtrOcamlString.
 
 (** ** Extraction Language *)
 Extraction Language OCaml.
