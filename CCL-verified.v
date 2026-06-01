@@ -9684,50 +9684,11 @@ Extract Constant Nat.even => "Z.is_even".
 
 (** Products *)
 Extract Inductive prod => "( * )" [ "(,)" ].
-Extract Constant fst => "fst".
-Extract Constant snd => "snd".
 
-(** Lists *)
+(** Lists. The polymorphic list operations extract to generated recursive
+    definitions; hand realizations such as [List.append] mismatch the argument
+    count once extraction keeps an erased type argument. *)
 Extract Inductive list => "list" [ "[]" "(::)" ].
-Extract Constant app => "List.append".
-Extract Constant length => "(fun l -> Z.of_int (List.length l))".
-Extract Constant map => "List.map".
-Extract Constant filter => "List.filter".
-Extract Constant fold_left => "List.fold_left".
-Extract Constant fold_right => "List.fold_right".
-Extract Constant existsb => "List.exists".
-Extract Constant forallb => "List.for_all".
-Extract Constant firstn => "(fun n l -> 
-  let rec take n l = 
-    if Z.equal n Z.zero then [] 
-    else match l with 
-         | [] -> []
-         | h::t -> h :: take (Z.pred n) t
-  in take n l)".
-Extract Constant skipn => "(fun n l ->
-  let rec drop n l =
-    if Z.equal n Z.zero then l
-    else match l with
-         | [] -> []
-         | _::t -> drop (Z.pred n) t
-  in drop n l)".
-
-Extract Constant nth_error => 
-  "(fun l n ->
-    let rec nth_aux l n =
-      match l with
-      | [] -> None
-      | h :: t -> 
-          if Z.equal n Z.zero then Some h 
-          else nth_aux t (Z.pred n)
-    in nth_aux l n)".
-
-Extract Constant seq => 
-  "(fun start len ->
-    let rec build_seq n acc =
-      if Z.lt n Z.zero then acc
-      else build_seq (Z.pred n) (Z.add start n :: acc)
-    in build_seq (Z.pred len) [])".
 
 (** Options *)
 Extract Inductive option => "option" [ "Some" "None" ].
@@ -9742,7 +9703,8 @@ Extract Constant eqb => "( = )".
 
 (** Strings and characters *)
 Extract Inductive string => "string" 
-  [ "''" "(fun c s -> (String.make 1 c) ^ s)" ].
+  [ """""" "(fun (c, s) -> (String.make 1 c) ^ s)" ]
+  "(fun fE fS s -> if String.length s = 0 then fE () else fS s.[0] (String.sub s 1 (String.length s - 1)))".
 
 Extract Constant list_ascii_of_string => "(fun s ->
   let rec explode s n acc =
@@ -9761,39 +9723,9 @@ Extract Inductive ascii => "char"
                  (if b6 then 64 else 0) lor
                  (if b7 then 128 else 0)))" ].
 
-(** ** Coordinate Operations *)
-
-Extract Constant coord_x => "fst".
-Extract Constant coord_y => "snd".
-
-Extract Constant abs_diff => 
-  "(fun a b -> if Z.leq a b then Z.sub b a else Z.sub a b)".
-
-Extract Constant coord_eqb => 
-  "(fun (x1,y1) (x2,y2) -> Z.equal x1 x2 && Z.equal y1 y2)".
-
-(** ** Adjacency Operations *)
-
-Extract Constant adjacent_4 => 
-  "(fun c1 c2 ->
-    let dx = abs_diff (fst c1) (fst c2) in
-    let dy = abs_diff (snd c1) (snd c2) in
-    Z.equal (Z.add dx dy) Z.one && 
-    (Z.equal dx Z.zero || Z.equal dy Z.zero))".
-
-Extract Constant adjacent_8 =>
-  "(fun c1 c2 ->
-    let dx = abs_diff (fst c1) (fst c2) in
-    let dy = abs_diff (snd c1) (snd c2) in
-    Z.leq dx Z.one && Z.leq dy Z.one &&
-    not (Z.equal dx Z.zero && Z.equal dy Z.zero))".
-
-(** ** Raster Order *)
-
-Extract Constant raster_lt =>
-  "(fun c1 c2 ->
-    Z.lt (snd c1) (snd c2) ||
-    (Z.equal (snd c1) (snd c2) && Z.lt (fst c1) (fst c2)))".
+(** Coordinate, adjacency, and raster operations extract directly from their
+    verified Coq definitions; no hand realization is needed (and hand ones using
+    [fst]/[snd] clash with extraction's erased type arguments). *)
 
 (** ** ASCII Comparison for Image Creation *)
 
