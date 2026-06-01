@@ -8625,6 +8625,206 @@ Proof.
   - exact (ccl_8_complete img).
 Qed.
 
+(** ** Components are exactly connectivity classes.
+
+    For foreground pixels, sharing a label is equivalent to being connected.
+    This is the partition characterisation underlying component counting. *)
+Theorem ccl_4_label_iff_connected : forall img c1 c2,
+  get_pixel img c1 = true ->
+  (ccl_4 img c1 = ccl_4 img c2 <-> connected img adjacent_4 c1 c2).
+Proof.
+  intros img c1 c2 Hfg1. split.
+  - intro Heq. apply (ccl_4_complete img c1 c2 Heq).
+    apply ccl_4_foreground_positive. exact Hfg1.
+  - apply connected_pixels_same_label.
+Qed.
+
+Theorem ccl_8_label_iff_connected : forall img c1 c2,
+  get_pixel img c1 = true ->
+  (ccl_8 img c1 = ccl_8 img c2 <-> connected img adjacent_8 c1 c2).
+Proof.
+  intros img c1 c2 Hfg1. split.
+  - intro Heq. apply (ccl_8_complete img c1 c2 Heq).
+    apply ccl_8_foreground_positive. exact Hfg1.
+  - apply connected_pixels_same_label_8.
+Qed.
+
+(** * Label-Range Exactness: every label in [1..k] is realized
+
+    Generic [next_label] projections, then an invariant that every provisional
+    label value below [next_label] is carried by some foreground pixel. *)
+
+Lemma pp_next_label_nopos_g : forall adj cn img s c,
+  get_pixel img c = true ->
+  filter (fun z => negb (z =? 0)) (map (labels s) (cn img c)) = [] ->
+  next_label (process_pixel img adj cn s c) = S (next_label s).
+Proof.
+  intros adj cn img s c Hpix Hfilter.
+  unfold process_pixel. rewrite Hpix. cbv zeta. rewrite Hfilter. cbn [next_label]. reflexivity.
+Qed.
+
+Lemma pp_next_label_pos_g : forall adj cn img s c l rest,
+  get_pixel img c = true ->
+  filter (fun z => negb (z =? 0)) (map (labels s) (cn img c)) = l :: rest ->
+  next_label (process_pixel img adj cn s c) = next_label s.
+Proof.
+  intros adj cn img s c l rest Hpix Hfilter.
+  unfold process_pixel. rewrite Hpix. cbv zeta. rewrite Hfilter. cbn [next_label]. reflexivity.
+Qed.
+
+Lemma fold_value_witnessed_prefix : forall img adj cn done,
+  (exists todo, all_coords img = done ++ todo) ->
+  (forall q, ~ In q done -> labels (fold_left (process_pixel img adj cn) done initial_state) q = 0) /\
+  (forall v, 0 < v < next_label (fold_left (process_pixel img adj cn) done initial_state) ->
+     exists p, In p done /\ get_pixel img p = true /\
+               labels (fold_left (process_pixel img adj cn) done initial_state) p = v).
+Proof.
+  intros img adj cn done.
+  induction done as [| c pre IHrev] using rev_ind.
+  - intros _. split.
+    + intros q _. reflexivity.
+    + intros v Hv. exfalso. simpl in Hv. lia.
+  - intros [todo Hsplit0].
+    assert (Hsplit : all_coords img = pre ++ c :: todo).
+    { rewrite Hsplit0. rewrite <- app_assoc. reflexivity. }
+    destruct (IHrev (ex_intro _ (c :: todo) Hsplit)) as [IHunproc IHwit].
+    rewrite fold_left_app. cbn [fold_left].
+    set (s_pre := fold_left (process_pixel img adj cn) pre initial_state) in *.
+    assert (Hcnotin : ~ In c pre).
+    { assert (HND : NoDup (all_coords img)) by apply all_coords_NoDup.
+      rewrite Hsplit in HND. apply NoDup_remove_2 in HND.
+      intro Hc. apply HND. apply in_app_iff. left. exact Hc. }
+    assert (Hcz : labels s_pre c = 0) by (apply IHunproc; exact Hcnotin).
+    split.
+    + intros q Hqnotin.
+      assert (Hne : c <> q).
+      { intro Heq. subst q. apply Hqnotin. apply in_app_iff. right. left. reflexivity. }
+      rewrite (process_pixel_labels_unchanged img adj cn s_pre c q Hne).
+      apply IHunproc. intro Hqpre. apply Hqnotin. apply in_app_iff. left. exact Hqpre.
+    + intros v Hv.
+      destruct (get_pixel img c) eqn:Hpixc.
+      * destruct (filter (fun z => negb (z =? 0)) (map (labels s_pre) (cn img c))) as [|l rest] eqn:Hfilter.
+        -- rewrite (pp_next_label_nopos_g adj cn img s_pre c Hpixc Hfilter) in Hv.
+           destruct (Nat.eq_dec v (next_label s_pre)) as [Hveq | Hvneq].
+           ++ exists c. split; [apply in_app_iff; right; left; reflexivity | split; [exact Hpixc |]].
+              rewrite (pp_labels_at_c_nopos_g adj cn img s_pre c Hpixc Hfilter). symmetry. exact Hveq.
+           ++ assert (Hv' : 0 < v < next_label s_pre) by lia.
+              destruct (IHwit v Hv') as [p [Hppre [Hpfg Hpv]]].
+              assert (Hcp : c <> p) by (intro Heq; subst p; rewrite Hcz in Hpv; lia).
+              exists p. split; [apply in_app_iff; left; exact Hppre | split; [exact Hpfg |]].
+              rewrite (process_pixel_labels_unchanged img adj cn s_pre c p Hcp). exact Hpv.
+        -- rewrite (pp_next_label_pos_g adj cn img s_pre c l rest Hpixc Hfilter) in Hv.
+           destruct (IHwit v Hv) as [p [Hppre [Hpfg Hpv]]].
+           assert (Hcp : c <> p) by (intro Heq; subst p; rewrite Hcz in Hpv; lia).
+           exists p. split; [apply in_app_iff; left; exact Hppre | split; [exact Hpfg |]].
+           rewrite (process_pixel_labels_unchanged img adj cn s_pre c p Hcp). exact Hpv.
+      * rewrite (process_pixel_background_unchanged img adj cn s_pre c Hpixc) in Hv |- *.
+        destruct (IHwit v Hv) as [p [Hppre [Hpfg Hpv]]].
+        exists p. split; [apply in_app_iff; left; exact Hppre | split; [exact Hpfg | exact Hpv]].
+Qed.
+
+Lemma ccl_pass_value_witnessed : forall img adj cn v,
+  0 < v < next_label (ccl_pass img adj cn) ->
+  exists p, get_pixel img p = true /\ labels (ccl_pass img adj cn) p = v.
+Proof.
+  intros img adj cn v Hv.
+  unfold ccl_pass in *.
+  destruct (proj2 (fold_value_witnessed_prefix img adj cn (all_coords img)
+             (ex_intro _ (@nil coord) (eq_sym (app_nil_r (all_coords img))))) v Hv)
+    as [p [_ [Hpfg Hpv]]].
+  exists p. split; [exact Hpfg | exact Hpv].
+Qed.
+
+(** [ccl_algorithm] unfolded to a compaction of resolved labels. *)
+Lemma ccl_algorithm_eq : forall adj cn img c,
+  ccl_algorithm img adj cn c =
+  build_label_map (equiv (ccl_pass img adj cn)) (next_label (ccl_pass img adj cn) - 1)
+                  (uf_find (equiv (ccl_pass img adj cn)) (labels (ccl_pass img adj cn) c)).
+Proof.
+  intros adj cn img c. unfold ccl_algorithm, compact_labels, resolve_labels. reflexivity.
+Qed.
+
+(** Converse of [assign_compact_spec]: a representative at index [k] is assigned
+    compact label [next + k]. *)
+Lemma assign_compact_complete : forall u reps next r k,
+  NoDup reps -> nth_error reps k = Some r -> uf_find u r = r ->
+  (fix assign_compact (reps : list nat) (next label : nat) {struct reps} : nat :=
+     match reps with
+     | [] => 0
+     | r0 :: rest =>
+         if uf_find u label =? r0 then next else assign_compact rest (S next) label
+     end) reps next r = next + k.
+Proof.
+  intros u reps. induction reps as [|r0 rest IH]; intros next r k HND Hnth Hrep.
+  - destruct k; simpl in Hnth; discriminate.
+  - simpl. destruct (uf_find u r =? r0) eqn:E.
+    + apply Nat.eqb_eq in E. rewrite Hrep in E.
+      destruct k.
+      * lia.
+      * exfalso. simpl in Hnth. subst r0.
+        inversion HND as [|x0 l0 Hnin Hnd]. subst.
+        apply Hnin. eapply nth_error_In. exact Hnth.
+    + destruct k.
+      * simpl in Hnth. injection Hnth as Hr0. subst r0.
+        rewrite Hrep in E. rewrite Nat.eqb_refl in E. discriminate.
+      * simpl in Hnth.
+        inversion HND as [|x0 l0 Hnin Hnd]. subst.
+        rewrite (IH (S next) r k Hnd Hnth Hrep). lia.
+Qed.
+
+Lemma build_label_map_complete : forall u max r k,
+  NoDup (filter (fun x => is_representative u x) (seq 1 max)) ->
+  nth_error (filter (fun x => is_representative u x) (seq 1 max)) k = Some r ->
+  uf_find u r = r -> r <> 0 ->
+  build_label_map u max r = 1 + k.
+Proof.
+  intros u max r k HND Hnth Hrep Hr0.
+  unfold build_label_map. cbv zeta beta.
+  destruct (r =? 0) eqn:E.
+  - apply Nat.eqb_eq in E. contradiction.
+  - exact (assign_compact_complete u (filter (fun x => is_representative u x) (seq 1 max)) 1 r k HND Hnth Hrep).
+Qed.
+
+(** Generic onto-direction: every compact label in [1..k] is realized by some
+    foreground pixel, where k is the number of representatives. *)
+Lemma ccl_algorithm_label_onto_g : forall adj cn img j,
+  1 <= j <= length (filter (fun x => is_representative (equiv (ccl_pass img adj cn)) x)
+                            (seq 1 (next_label (ccl_pass img adj cn) - 1))) ->
+  exists p, get_pixel img p = true /\ ccl_algorithm img adj cn p = j.
+Proof.
+  intros adj cn img j [Hj1 Hj2].
+  remember (filter (fun x => is_representative (equiv (ccl_pass img adj cn)) x)
+                   (seq 1 (next_label (ccl_pass img adj cn) - 1))) as reps eqn:Hreps.
+  destruct (nth_error reps (j - 1)) as [r|] eqn:Hnth.
+  2: { apply nth_error_None in Hnth. lia. }
+  assert (Hrin : In r reps) by (eapply nth_error_In; exact Hnth).
+  rewrite Hreps in Hrin. apply filter_In in Hrin. destruct Hrin as [Hseq Hisrep].
+  apply in_seq in Hseq.
+  unfold is_representative in Hisrep. apply Nat.eqb_eq in Hisrep.
+  assert (Hr_range : 0 < r < next_label (ccl_pass img adj cn)) by lia.
+  destruct (ccl_pass_value_witnessed img adj cn r Hr_range) as [p [Hpfg Hpv]].
+  exists p. split; [exact Hpfg|].
+  rewrite ccl_algorithm_eq. rewrite Hpv. rewrite Hisrep.
+  assert (HND : NoDup reps) by (rewrite Hreps; apply filter_NoDup; apply seq_NoDup).
+  rewrite Hreps in Hnth, HND.
+  rewrite (build_label_map_complete (equiv (ccl_pass img adj cn)) (next_label (ccl_pass img adj cn) - 1)
+             r (j - 1) HND Hnth Hisrep ltac:(lia)).
+  lia.
+Qed.
+
+(** [ccl_4] / [ccl_8] use exactly the compact labels [1..k]. *)
+Theorem ccl_4_label_onto : forall img j,
+  1 <= j <= length (filter (fun x => is_representative (equiv (ccl_pass img adjacent_4 check_prior_neighbors_4)) x)
+                            (seq 1 (next_label (ccl_pass img adjacent_4 check_prior_neighbors_4) - 1))) ->
+  exists p, get_pixel img p = true /\ ccl_4 img p = j.
+Proof. intros img j Hj. apply (ccl_algorithm_label_onto_g adjacent_4 check_prior_neighbors_4 img j Hj). Qed.
+
+Theorem ccl_8_label_onto : forall img j,
+  1 <= j <= length (filter (fun x => is_representative (equiv (ccl_pass img adjacent_8 check_prior_neighbors_8)) x)
+                            (seq 1 (next_label (ccl_pass img adjacent_8 check_prior_neighbors_8) - 1))) ->
+  exists p, get_pixel img p = true /\ ccl_8 img p = j.
+Proof. intros img j Hj. apply (ccl_algorithm_label_onto_g adjacent_8 check_prior_neighbors_8 img j Hj). Qed.
+
 (** ** Zero Is Never Used for Foreground *)
 Theorem ccl_4_zero_only_background : forall img,
   let final_labeling := ccl_4 img in
