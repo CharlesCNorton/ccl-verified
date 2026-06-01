@@ -8026,6 +8026,111 @@ Proof.
   apply build_label_map_le.
 Qed.
 
+(** * 8-Connectivity: Missing Neighbour-Completeness Lemmas
+
+    The file already proves prior 8-neighbours are adjacent and earlier in raster
+    order; the converse (an adjacent earlier in-bounds pixel is a prior neighbour)
+    was missing and is needed to lift correctness to 8-connectivity. *)
+
+Lemma abs_diff_le1_cases : forall a b, abs_diff a b <= 1 -> a = b \/ a = S b \/ b = S a.
+Proof.
+  intros a b H. unfold abs_diff in H.
+  destruct (a <=? b) eqn:E; simpl in H.
+  - apply Nat.leb_le in E. lia.
+  - apply Nat.leb_nle in E. lia.
+Qed.
+
+Lemma adjacent_8_before_cases : forall x y x' y',
+  adjacent_8 (x', y') (x, y) = true ->
+  raster_lt (x', y') (x, y) = true ->
+  (x' = x - 1 /\ y' = y - 1 /\ x > 0 /\ y > 0) \/
+  (x' = x /\ y' = y - 1 /\ y > 0) \/
+  (x' = x + 1 /\ y' = y - 1 /\ y > 0) \/
+  (x' = x - 1 /\ y' = y /\ x > 0).
+Proof.
+  intros x y x' y' Hadj Hbefore.
+  unfold adjacent_8, coord_x, coord_y in Hadj. cbn [fst snd] in Hadj.
+  apply andb_prop in Hadj. destruct Hadj as [Hle _Hne].
+  apply andb_prop in Hle. destruct Hle as [Hdx Hdy].
+  apply Nat.leb_le in Hdx. apply Nat.leb_le in Hdy.
+  apply raster_lt_position in Hbefore.
+  destruct Hbefore as [Hylt | [Hyeq Hxlt]].
+  - assert (Eyy : y' <=? y = true) by (apply Nat.leb_le; lia).
+    unfold abs_diff in Hdy. rewrite Eyy in Hdy. simpl in Hdy.
+    assert (Hy' : y' = y - 1) by lia.
+    assert (Hypos : y > 0) by lia.
+    destruct (abs_diff_le1_cases x' x Hdx) as [Hxe | [HxSb | HbSx]].
+    + right. left. split; [exact Hxe | split; [exact Hy' | exact Hypos]].
+    + right. right. left. split; [lia | split; [exact Hy' | exact Hypos]].
+    + left. split; [lia | split; [exact Hy' | split; [lia | exact Hypos]]].
+  - subst y'.
+    destruct (abs_diff_le1_cases x' x Hdx) as [Hxe | [HxSb | HbSx]].
+    + lia.
+    + lia.
+    + right. right. right. split; [lia | split; [reflexivity | lia]].
+Qed.
+
+Lemma prior_neighbors_8_complete : forall img x y x' y',
+  in_bounds img (x', y') = true ->
+  adjacent_8 (x', y') (x, y) = true ->
+  raster_lt (x', y') (x, y) = true ->
+  In (x', y') (prior_neighbors_8 img (x, y)).
+Proof.
+  intros img x y x' y' Hbound Hadj Hbefore.
+  destruct (adjacent_8_before_cases x y x' y' Hadj Hbefore)
+    as [[Hx' [Hy' [Hxpos Hypos]]] | [[Hx' [Hy' Hypos]] | [[Hx' [Hy' Hypos]] | [Hx' [Hy' Hxpos]]]]].
+  - subst x' y'. unfold prior_neighbors_8, coord_x, coord_y. cbn [fst snd].
+    assert (Hx : 0 <? x = true) by (apply Nat.ltb_lt; lia).
+    assert (Hy : 0 <? y = true) by (apply Nat.ltb_lt; lia).
+    rewrite Hx, Hy. simpl. left. reflexivity.
+  - subst x' y'. unfold prior_neighbors_8, coord_x, coord_y. cbn [fst snd].
+    assert (Hy : 0 <? y = true) by (apply Nat.ltb_lt; lia).
+    rewrite Hy.
+    apply in_app_iff. right. apply in_app_iff. left. left. reflexivity.
+  - subst x' y'. unfold prior_neighbors_8, coord_x, coord_y. cbn [fst snd].
+    assert (Hy : 0 <? y = true) by (apply Nat.ltb_lt; lia).
+    assert (Hxw : x + 1 <? width img = true).
+    { unfold in_bounds, coord_x, coord_y in Hbound. cbn [fst snd] in Hbound.
+      apply andb_prop in Hbound. destruct Hbound as [Hbx _]. exact Hbx. }
+    rewrite Hy, Hxw.
+    apply in_app_iff. right. apply in_app_iff. right. apply in_app_iff. left. left. reflexivity.
+  - subst x' y'. unfold prior_neighbors_8, coord_x, coord_y. cbn [fst snd].
+    assert (Hx : 0 <? x = true) by (apply Nat.ltb_lt; lia).
+    rewrite Hx.
+    apply in_app_iff. right. apply in_app_iff. right. apply in_app_iff. right. left. reflexivity.
+Qed.
+
+Theorem check_prior_neighbors_8_characterization : forall img c c',
+  In c' (check_prior_neighbors_8 img c) <->
+  (get_pixel img c' = true /\ adjacent_8 c' c = true /\ raster_lt c' c = true).
+Proof.
+  intros img c c'. unfold check_prior_neighbors_8. split.
+  - intro H. apply filter_In in H. destruct H as [Hin Hfilt].
+    apply andb_prop in Hfilt. destruct Hfilt as [Hpix Hadj].
+    split; [exact Hpix | split; [exact Hadj | exact (prior_neighbors_8_before img c c' Hin)]].
+  - intros [Hpix [Hadj Hbefore]].
+    apply filter_In. split.
+    + destruct c' as [x' y']. destruct c as [x y].
+      apply prior_neighbors_8_complete;
+        [apply foreground_in_bounds; exact Hpix | exact Hadj | exact Hbefore].
+    + apply andb_true_intro. split; [exact Hpix | exact Hadj].
+Qed.
+
+Lemma check_prior_neighbors_8_sound : forall img c c',
+  In c' (check_prior_neighbors_8 img c) ->
+  get_pixel img c' = true /\ adjacent_8 c' c = true /\ raster_lt c' c = true.
+Proof. intros img c c' H. apply check_prior_neighbors_8_characterization. exact H. Qed.
+
+Lemma check_prior_neighbors_8_complete : forall img c1 c2,
+  get_pixel img c1 = true -> get_pixel img c2 = true ->
+  adjacent_8 c1 c2 = true -> raster_lt c1 c2 = true ->
+  In c1 (check_prior_neighbors_8 img c2).
+Proof.
+  intros img c1 c2 Hfg1 Hfg2 Hadj Hbefore.
+  apply check_prior_neighbors_8_characterization.
+  split; [exact Hfg1 | split; [exact Hadj | exact Hbefore]].
+Qed.
+
 (** ** Zero Is Never Used for Foreground *)
 Theorem ccl_4_zero_only_background : forall img,
   let final_labeling := ccl_4 img in
