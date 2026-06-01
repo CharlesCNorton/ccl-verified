@@ -8131,6 +8131,500 @@ Proof.
   split; [exact Hfg1 | split; [exact Hadj | exact Hbefore]].
 Qed.
 
+(** * Generic Connectivity Bridge
+
+    Both soundness and completeness depend on the adjacency relation [adj] and
+    neighbour function [cn] only through three facts: [adj] is symmetric, [cn]
+    returns earlier foreground neighbours ([cn_sound]), and every earlier
+    foreground neighbour is returned ([cn_complete]). Bundling these as
+    [adj_compatible] lets us prove the bridge once and instantiate it for 4- and
+    8-connectivity. *)
+
+Definition adj_compatible (adj : coord -> coord -> bool) (cn : image -> coord -> list coord) : Prop :=
+  (forall a b, adj a b = adj b a) /\
+  (forall img c c', In c' (cn img c) ->
+     get_pixel img c' = true /\ adj c' c = true /\ raster_lt c' c = true) /\
+  (forall img c1 c2, get_pixel img c1 = true -> get_pixel img c2 = true ->
+     adj c1 c2 = true -> raster_lt c1 c2 = true -> In c1 (cn img c2)).
+
+(** Generic [process_pixel] projection lemmas. *)
+Lemma pp_equiv_pos_g : forall adj cn img s c l rest,
+  get_pixel img c = true ->
+  filter (fun z => negb (z =? 0)) (map (labels s) (cn img c)) = l :: rest ->
+  equiv (process_pixel img adj cn s c)
+    = fold_left (fun u l' => record_adjacency u (fold_left Nat.min rest l) l') (l :: rest) (equiv s).
+Proof.
+  intros adj cn img s c l rest Hpix Hfilter.
+  unfold process_pixel. rewrite Hpix. cbv zeta. rewrite Hfilter. reflexivity.
+Qed.
+
+Lemma pp_labels_at_c_pos_g : forall adj cn img s c l rest,
+  get_pixel img c = true ->
+  filter (fun z => negb (z =? 0)) (map (labels s) (cn img c)) = l :: rest ->
+  labels (process_pixel img adj cn s c) c = fold_left Nat.min rest l.
+Proof.
+  intros adj cn img s c l rest Hpix Hfilter.
+  unfold process_pixel. rewrite Hpix. cbv zeta. rewrite Hfilter.
+  cbn [labels]. rewrite coord_eqb_refl. reflexivity.
+Qed.
+
+Lemma pp_equiv_nopos_g : forall adj cn img s c,
+  get_pixel img c = true ->
+  filter (fun z => negb (z =? 0)) (map (labels s) (cn img c)) = [] ->
+  equiv (process_pixel img adj cn s c) = equiv s.
+Proof.
+  intros adj cn img s c Hpix Hfilter.
+  unfold process_pixel. rewrite Hpix. cbv zeta. rewrite Hfilter. reflexivity.
+Qed.
+
+Lemma pp_labels_at_c_nopos_g : forall adj cn img s c,
+  get_pixel img c = true ->
+  filter (fun z => negb (z =? 0)) (map (labels s) (cn img c)) = [] ->
+  labels (process_pixel img adj cn s c) c = next_label s.
+Proof.
+  intros adj cn img s c Hpix Hfilter.
+  unfold process_pixel. rewrite Hpix. cbv zeta. rewrite Hfilter.
+  cbn [labels]. rewrite coord_eqb_refl. reflexivity.
+Qed.
+
+Lemma positive_label_witness_g : forall (cn : image -> coord -> list coord) img c s_pre l rest ll,
+  filter (fun z => negb (z =? 0)) (map (labels s_pre) (cn img c)) = l :: rest ->
+  In ll (l :: rest) ->
+  exists p, In p (cn img c) /\ labels s_pre p = ll.
+Proof.
+  intros cn img c s_pre l rest ll Hfilter Hin.
+  assert (Hinf : In ll (filter (fun z => negb (z =? 0)) (map (labels s_pre) (cn img c)))).
+  { rewrite Hfilter. exact Hin. }
+  apply filter_In in Hinf. destruct Hinf as [Hmap _].
+  apply in_map_iff in Hmap. destruct Hmap as [p [Hlp Hpin]].
+  exists p. split; [exact Hpin | exact Hlp].
+Qed.
+
+Lemma touch_to_neighbor_g : forall (cn : image -> coord -> list coord) img c s_pre l rest X,
+  filter (fun z => negb (z =? 0)) (map (labels s_pre) (cn img c)) = l :: rest ->
+  (uf_same_set (equiv s_pre) X (fold_left Nat.min rest l) = true \/
+   (exists ll, In ll (l :: rest) /\ uf_same_set (equiv s_pre) X ll = true)) ->
+  exists p, In p (cn img c) /\ uf_same_set (equiv s_pre) X (labels s_pre p) = true.
+Proof.
+  intros cn img c s_pre l rest X Hfilter Htouch.
+  destruct Htouch as [Hmin | [ll [Hll Hsame]]].
+  - destruct (positive_label_witness_g cn img c s_pre l rest (fold_left Nat.min rest l)
+               Hfilter (fold_min_in rest l)) as [p [Hpin Hlp]].
+    exists p. split; [exact Hpin | rewrite Hlp; exact Hmin].
+  - destruct (positive_label_witness_g cn img c s_pre l rest ll Hfilter Hll) as [p [Hpin Hlp]].
+    exists p. split; [exact Hpin | rewrite Hlp; exact Hsame].
+Qed.
+
+Lemma neighbor_in_prefix_g : forall adj cn, adj_compatible adj cn ->
+  forall img pre c todo p,
+  all_coords img = pre ++ c :: todo ->
+  In p (cn img c) ->
+  In p pre.
+Proof.
+  intros adj cn Hcompat img pre c todo p Hsplit Hin.
+  destruct Hcompat as [_ [Hsound _]].
+  destruct (Hsound img c p Hin) as [Hpix [Hadj Hbefore]].
+  assert (Hbp : in_bounds img p = true) by (apply foreground_in_bounds; exact Hpix).
+  assert (Hbc : in_bounds img c = true).
+  { apply all_coords_sound. rewrite Hsplit. apply in_app_iff. right. left. reflexivity. }
+  assert (Hnotin : ~ In c pre).
+  { assert (HND : NoDup (all_coords img)) by apply all_coords_NoDup.
+    rewrite Hsplit in HND. apply NoDup_remove_2 in HND.
+    intro Hc. apply HND. apply in_app_iff. left. exact Hc. }
+  apply (raster_lt_in_prefix img p c pre todo Hbp Hbc Hbefore Hsplit Hnotin).
+Qed.
+
+Lemma prefix_touch_connected_to_c_g : forall adj cn, adj_compatible adj cn ->
+  forall img pre c todo a (s_pre : ccl_state),
+  all_coords img = pre ++ c :: todo ->
+  get_pixel img c = true ->
+  (forall x y, In x pre -> In y pre ->
+     get_pixel img x = true -> get_pixel img y = true ->
+     uf_same_set (equiv s_pre) (labels s_pre x) (labels s_pre y) = true ->
+     connected img adj x y) ->
+  In a pre -> get_pixel img a = true ->
+  (exists p, In p (cn img c) /\
+             uf_same_set (equiv s_pre) (labels s_pre a) (labels s_pre p) = true) ->
+  connected img adj a c.
+Proof.
+  intros adj cn Hcompat img pre c todo a s_pre Hsplit Hc IH Hain Hafg [p [Hpin Hsame]].
+  assert (Hppre : In p pre) by (apply (neighbor_in_prefix_g adj cn Hcompat img pre c todo p Hsplit Hpin)).
+  assert (Hcopy := Hcompat). destruct Hcopy as [_ [Hsound _]].
+  destruct (Hsound img c p Hpin) as [Hpfg [Hpadj Hpbefore]].
+  assert (Hap : connected img adj a p) by (apply (IH a p Hain Hppre Hafg Hpfg Hsame)).
+  assert (Hpc : connected img adj p c)
+    by (apply adjacent_connected; [exact Hpfg | exact Hc | exact Hpadj]).
+  apply (connected_trans img adj a p c Hap Hpc).
+Qed.
+
+(** Generic inductive step for the connectivity invariant. *)
+Lemma conn_inv_step_g : forall adj cn, adj_compatible adj cn ->
+  forall img pre c todo s_pre,
+  all_coords img = pre ++ c :: todo ->
+  s_pre = fold_left (process_pixel img adj cn) pre initial_state ->
+  (forall x y, In x pre -> In y pre ->
+     get_pixel img x = true -> get_pixel img y = true ->
+     uf_same_set (equiv s_pre) (labels s_pre x) (labels s_pre y) = true ->
+     connected img adj x y) ->
+  forall a b,
+  In a (pre ++ [c]) -> In b (pre ++ [c]) ->
+  get_pixel img a = true -> get_pixel img b = true ->
+  uf_same_set (equiv (process_pixel img adj cn s_pre c))
+              (labels (process_pixel img adj cn s_pre c) a)
+              (labels (process_pixel img adj cn s_pre c) b) = true ->
+  connected img adj a b.
+Proof.
+  intros adj cn Hcompat img pre c todo s_pre Hsplit Hs_pre IH a b Hain Hbin Hafg Hbfg Huf.
+  assert (Hcopy := Hcompat). destruct Hcopy as [Hsym [Hsound Hcomplete]].
+  assert (Hcnotin : ~ In c pre).
+  { assert (HND : NoDup (all_coords img)) by apply all_coords_NoDup.
+    rewrite Hsplit in HND. apply NoDup_remove_2 in HND.
+    intro Hc. apply HND. apply in_app_iff. left. exact Hc. }
+  assert (Hane : In a pre \/ a = c).
+  { apply in_app_iff in Hain. destruct Hain as [H|[H|[]]]; [left; exact H | right; symmetry; exact H]. }
+  assert (Hbne : In b pre \/ b = c).
+  { apply in_app_iff in Hbin. destruct Hbin as [H|[H|[]]]; [left; exact H | right; symmetry; exact H]. }
+  assert (Hane_neq : forall x, In x pre -> c <> x).
+  { intros x Hx Heq. subst x. contradiction. }
+  destruct (get_pixel img c) eqn:Hpixc.
+  - destruct (filter (fun z => negb (z =? 0)) (map (labels s_pre) (cn img c)))
+      as [|l rest] eqn:Hfilter.
+    + rewrite (pp_equiv_nopos_g adj cn img s_pre c Hpixc Hfilter) in Huf.
+      assert (Hbnd : forall m, m <= next_label s_pre - 1 -> uf_find (equiv s_pre) m <= next_label s_pre - 1).
+      { rewrite Hs_pre. exact (proj1 (fold_process_preserves_uf_find_bound img adj cn pre initial_state
+            initial_state_next_label_positive (proj1 initial_state_bounds) (proj2 initial_state_both_invariants) (proj2 initial_state_bounds))). }
+      assert (Hunused : forall m, m >= next_label s_pre -> uf_find (equiv s_pre) m = m).
+      { rewrite Hs_pre. exact (proj2 (fold_process_preserves_uf_find_bound img adj cn pre initial_state
+            initial_state_next_label_positive (proj1 initial_state_bounds) (proj2 initial_state_both_invariants) (proj2 initial_state_bounds))). }
+      assert (Hlblt : forall x, labels s_pre x < next_label s_pre).
+      { rewrite Hs_pre. exact (fold_process_label_bounds img adj cn pre initial_state initial_state_labels_bounded). }
+      destruct Hane as [Hapre | Hac]; destruct Hbne as [Hbpre | Hbc].
+      * rewrite (process_pixel_labels_unchanged img adj cn s_pre c a (Hane_neq a Hapre)) in Huf.
+        rewrite (process_pixel_labels_unchanged img adj cn s_pre c b (Hane_neq b Hbpre)) in Huf.
+        apply (IH a b Hapre Hbpre Hafg Hbfg Huf).
+      * subst b.
+        rewrite (process_pixel_labels_unchanged img adj cn s_pre c a (Hane_neq a Hapre)) in Huf.
+        rewrite (pp_labels_at_c_nopos_g adj cn img s_pre c Hpixc Hfilter) in Huf.
+        exfalso. unfold uf_same_set in Huf. apply Nat.eqb_eq in Huf.
+        assert (Hla := Hlblt a).
+        assert (Hfa : uf_find (equiv s_pre) (labels s_pre a) <= next_label s_pre - 1) by (apply Hbnd; lia).
+        assert (Hfn : uf_find (equiv s_pre) (next_label s_pre) = next_label s_pre) by (apply Hunused; lia).
+        rewrite Hfn in Huf. lia.
+      * subst a.
+        rewrite (process_pixel_labels_unchanged img adj cn s_pre c b (Hane_neq b Hbpre)) in Huf.
+        rewrite (pp_labels_at_c_nopos_g adj cn img s_pre c Hpixc Hfilter) in Huf.
+        exfalso. unfold uf_same_set in Huf. apply Nat.eqb_eq in Huf.
+        assert (Hlb := Hlblt b).
+        assert (Hfb : uf_find (equiv s_pre) (labels s_pre b) <= next_label s_pre - 1) by (apply Hbnd; lia).
+        assert (Hfn : uf_find (equiv s_pre) (next_label s_pre) = next_label s_pre) by (apply Hunused; lia).
+        rewrite Hfn in Huf. lia.
+      * subst a b. apply connected_refl. exact Hpixc.
+    + rewrite (pp_equiv_pos_g adj cn img s_pre c l rest Hpixc Hfilter) in Huf.
+      apply fold_record_adjacency_same_set_cases in Huf.
+      destruct Huf as [HL | [HRa HRb]].
+      * destruct Hane as [Hapre | Hac]; destruct Hbne as [Hbpre | Hbc].
+        -- rewrite (process_pixel_labels_unchanged img adj cn s_pre c a (Hane_neq a Hapre)) in HL.
+           rewrite (process_pixel_labels_unchanged img adj cn s_pre c b (Hane_neq b Hbpre)) in HL.
+           apply (IH a b Hapre Hbpre Hafg Hbfg HL).
+        -- subst b.
+           rewrite (process_pixel_labels_unchanged img adj cn s_pre c a (Hane_neq a Hapre)) in HL.
+           rewrite (pp_labels_at_c_pos_g adj cn img s_pre c l rest Hpixc Hfilter) in HL.
+           apply (prefix_touch_connected_to_c_g adj cn Hcompat img pre c todo a s_pre Hsplit Hpixc IH Hapre Hafg).
+           apply (touch_to_neighbor_g cn img c s_pre l rest (labels s_pre a) Hfilter).
+           left. exact HL.
+        -- subst a.
+           rewrite (process_pixel_labels_unchanged img adj cn s_pre c b (Hane_neq b Hbpre)) in HL.
+           rewrite (pp_labels_at_c_pos_g adj cn img s_pre c l rest Hpixc Hfilter) in HL.
+           assert (Hbc2 : connected img adj b c).
+           { apply (prefix_touch_connected_to_c_g adj cn Hcompat img pre c todo b s_pre Hsplit Hpixc IH Hbpre Hbfg).
+             apply (touch_to_neighbor_g cn img c s_pre l rest (labels s_pre b) Hfilter).
+             left. rewrite uf_same_set_sym. exact HL. }
+           apply (connected_sym img adj b c Hsym Hbc2).
+        -- subst a b. apply connected_refl. exact Hpixc.
+      * assert (Hac2 : connected img adj a c).
+        { destruct Hane as [Hapre | Hac].
+          - rewrite (process_pixel_labels_unchanged img adj cn s_pre c a (Hane_neq a Hapre)) in HRa.
+            apply (prefix_touch_connected_to_c_g adj cn Hcompat img pre c todo a s_pre Hsplit Hpixc IH Hapre Hafg).
+            apply (touch_to_neighbor_g cn img c s_pre l rest (labels s_pre a) Hfilter). exact HRa.
+          - subst a. apply connected_refl. exact Hpixc. }
+        assert (Hbc2 : connected img adj b c).
+        { destruct Hbne as [Hbpre | Hbc].
+          - rewrite (process_pixel_labels_unchanged img adj cn s_pre c b (Hane_neq b Hbpre)) in HRb.
+            apply (prefix_touch_connected_to_c_g adj cn Hcompat img pre c todo b s_pre Hsplit Hpixc IH Hbpre Hbfg).
+            apply (touch_to_neighbor_g cn img c s_pre l rest (labels s_pre b) Hfilter). exact HRb.
+          - subst b. apply connected_refl. exact Hpixc. }
+        apply (connected_trans img adj a c b Hac2).
+        apply (connected_sym img adj b c Hsym Hbc2).
+  - rewrite (process_pixel_background_unchanged img adj cn s_pre c Hpixc) in Huf.
+    destruct Hane as [Hapre | Hac]; [| subst a; rewrite Hpixc in Hafg; discriminate].
+    destruct Hbne as [Hbpre | Hbc]; [| subst b; rewrite Hpixc in Hbfg; discriminate].
+    apply (IH a b Hapre Hbpre Hafg Hbfg Huf).
+Qed.
+
+Lemma ccl_pass_conn_prefix_g : forall adj cn, adj_compatible adj cn ->
+  forall img done,
+  (exists todo, all_coords img = done ++ todo) ->
+  forall a b,
+     In a done -> In b done ->
+     get_pixel img a = true -> get_pixel img b = true ->
+     uf_same_set (equiv (fold_left (process_pixel img adj cn) done initial_state))
+                 (labels (fold_left (process_pixel img adj cn) done initial_state) a)
+                 (labels (fold_left (process_pixel img adj cn) done initial_state) b) = true ->
+     connected img adj a b.
+Proof.
+  intros adj cn Hcompat img done.
+  induction done as [| c pre IHrev] using rev_ind.
+  - intros _ a b [].
+  - intros [todo Hsplit0] a b Hain Hbin Hafg Hbfg Huf.
+    assert (Hsplit : all_coords img = pre ++ c :: todo).
+    { rewrite Hsplit0. rewrite <- app_assoc. reflexivity. }
+    assert (IHpre : forall x y, In x pre -> In y pre ->
+              get_pixel img x = true -> get_pixel img y = true ->
+              uf_same_set (equiv (fold_left (process_pixel img adj cn) pre initial_state))
+                          (labels (fold_left (process_pixel img adj cn) pre initial_state) x)
+                          (labels (fold_left (process_pixel img adj cn) pre initial_state) y) = true ->
+              connected img adj x y).
+    { apply IHrev. exists (c :: todo). exact Hsplit. }
+    rewrite fold_left_app in Huf. cbn [fold_left] in Huf.
+    exact (conn_inv_step_g adj cn Hcompat img pre c todo
+             (fold_left (process_pixel img adj cn) pre initial_state)
+             Hsplit eq_refl IHpre a b Hain Hbin Hafg Hbfg Huf).
+Qed.
+
+Lemma ccl_pass_uf_implies_connected_g : forall adj cn, adj_compatible adj cn ->
+  forall img a b,
+  get_pixel img a = true -> get_pixel img b = true ->
+  uf_same_set (equiv (ccl_pass img adj cn))
+              (labels (ccl_pass img adj cn) a)
+              (labels (ccl_pass img adj cn) b) = true ->
+  connected img adj a b.
+Proof.
+  intros adj cn Hcompat img a b Hafg Hbfg Huf.
+  apply (ccl_pass_conn_prefix_g adj cn Hcompat img (all_coords img)).
+  - exists []. rewrite app_nil_r. reflexivity.
+  - apply all_coords_complete. apply foreground_in_bounds. exact Hafg.
+  - apply all_coords_complete. apply foreground_in_bounds. exact Hbfg.
+  - exact Hafg.
+  - exact Hbfg.
+  - exact Huf.
+Qed.
+
+(** Generic foreground positivity. *)
+Lemma foreground_positive_g : forall adj cn img c,
+  get_pixel img c = true ->
+  ccl_algorithm img adj cn c > 0.
+Proof.
+  intros adj cn img c Hfg.
+  unfold ccl_algorithm, compact_labels.
+  assert (Hbound: in_bounds img c = true) by (apply foreground_in_bounds; assumption).
+  set (s := ccl_pass img adj cn).
+  set (resolved := resolve_labels (equiv s) (labels s)).
+  assert (Hresolved_pos: resolved c > 0).
+  { unfold resolved, s. apply ccl_pass_resolve_foreground_positive; assumption. }
+  assert (Hresolved_bound: resolved c <= next_label s - 1).
+  { unfold resolved, resolve_labels. apply uf_find_preserves_ccl_bound.
+    unfold s. apply ccl_pass_labels_range_contiguous. }
+  assert (Huf_resolved_pos: uf_find (equiv s) (resolved c) > 0).
+  { assert (resolved c <> 0) by lia.
+    assert (uf_find (equiv s) (resolved c) <> 0).
+    { unfold s. apply ccl_pass_preserves_full_nonzero. assumption. }
+    destruct (uf_find (equiv s) (resolved c)) eqn:E.
+    - contradiction.
+    - apply Nat.lt_0_succ. }
+  assert (Huf_resolved_bound: uf_find (equiv s) (resolved c) <= next_label s - 1).
+  { apply uf_find_preserves_ccl_bound. assumption. }
+  apply build_label_map_preserves_positive.
+  - assumption.
+  - assumption.
+  - assumption.
+  - assumption.
+  - unfold s. apply ccl_pass_idempotent.
+Qed.
+
+(** Generic soundness: processing [c2] merges it with a prior neighbour [c1]. *)
+Lemma pp_merges_with_prior_g : forall adj cn img c1 c2 s,
+  get_pixel img c2 = true -> In c1 (cn img c2) ->
+  labels s c1 > 0 -> next_label s > 0 ->
+  uf_same_set (equiv (process_pixel img adj cn s c2))
+              (labels (process_pixel img adj cn s c2) c2) (labels s c1) = true.
+Proof.
+  intros adj cn img c1 c2 s Hfg2 Hin Hpos Hnext.
+  assert (H := process_pixel_labels_current_pixel img adj cn s c2 Hfg2 Hnext).
+  destruct H as [_ Hequiv].
+  apply Hequiv; assumption.
+Qed.
+
+Lemma adjacent_merged_when_second_g : forall adj cn, adj_compatible adj cn ->
+  forall img c1 c2,
+  get_pixel img c1 = true -> get_pixel img c2 = true ->
+  adj c1 c2 = true -> raster_lt c1 c2 = true ->
+  forall prefix suffix,
+    all_coords img = prefix ++ c2 :: suffix -> In c1 prefix ->
+    uf_same_set (equiv (fold_left (process_pixel img adj cn) (prefix ++ [c2]) initial_state))
+                (labels (fold_left (process_pixel img adj cn) (prefix ++ [c2]) initial_state) c1)
+                (labels (fold_left (process_pixel img adj cn) (prefix ++ [c2]) initial_state) c2) = true.
+Proof.
+  intros adj cn Hcompat img c1 c2 Hfg1 Hfg2 Hadj Horder prefix suffix Hsplit Hin1.
+  assert (Hcopy := Hcompat). destruct Hcopy as [_ [_ Hcomplete]].
+  rewrite fold_left_app. cbn [fold_left].
+  set (s_before := fold_left (process_pixel img adj cn) prefix initial_state).
+  assert (Hnext : next_label s_before > 0).
+  { apply fold_process_preserves_next_label_positive. apply initial_state_next_label_positive. }
+  assert (Hlabel1 : labels s_before c1 > 0).
+  { apply fold_process_labels_foreground.
+    - apply (all_coords_prefix_nodup img prefix c2 suffix Hsplit).
+    - apply initial_state_next_label_positive.
+    - exact Hin1.
+    - exact Hfg1. }
+  assert (Hin_check : In c1 (cn img c2)) by (apply Hcomplete; assumption).
+  assert (Hunchanged : labels (process_pixel img adj cn s_before c2) c1 = labels s_before c1).
+  { apply process_pixel_labels_unchanged.
+    intro Heq. subst c2. rewrite raster_lt_irrefl in Horder. discriminate. }
+  rewrite Hunchanged.
+  rewrite uf_same_set_sym.
+  apply (pp_merges_with_prior_g adj cn img c1 c2 s_before Hfg2 Hin_check Hlabel1 Hnext).
+Qed.
+
+Lemma adjacent_first_before_second_g : forall adj cn, adj_compatible adj cn ->
+  forall img c1 c2,
+  get_pixel img c1 = true -> get_pixel img c2 = true ->
+  adj c1 c2 = true -> raster_lt c1 c2 = true ->
+  in_bounds img c1 = true -> in_bounds img c2 = true ->
+  uf_same_set (equiv (ccl_pass img adj cn))
+              (labels (ccl_pass img adj cn) c1) (labels (ccl_pass img adj cn) c2) = true.
+Proof.
+  intros adj cn Hcompat img c1 c2 Hfg1 Hfg2 Hadj Horder Hbound1 Hbound2.
+  destruct (all_coords_split_at img c2 Hbound2) as [prefix [suffix [Hsplit [Hnotin_pre Hnotin_suf]]]].
+  assert (Hc1_in : In c1 prefix).
+  { apply (raster_lt_in_prefix img c1 c2 prefix suffix Hbound1 Hbound2 Horder Hsplit Hnotin_pre). }
+  assert (H := adjacent_merged_when_second_g adj cn Hcompat img c1 c2 Hfg1 Hfg2 Hadj Horder prefix suffix Hsplit Hc1_in).
+  unfold ccl_pass.
+  rewrite Hsplit, fold_left_app. simpl.
+  assert (Hc1_notin : ~ In c1 suffix).
+  { assert (HND : NoDup (all_coords img)) by apply all_coords_NoDup.
+    rewrite Hsplit in HND.
+    apply (not_in_both_parts prefix suffix c1 c2 HND Hc1_in). }
+  rewrite (fold_process_preserves_labels img adj cn suffix _ c1).
+  rewrite (fold_process_preserves_labels img adj cn suffix _ c2).
+  - apply fold_process_preserves_equiv.
+    rewrite fold_left_app in H. simpl in H. exact H.
+  - intros c' Hc'. intro Heq. subst c'. contradiction.
+  - intros c' Hc'. intro Heq. subst c'. contradiction.
+Qed.
+
+Lemma adjacent_equiv_after_pass_g : forall adj cn, adj_compatible adj cn ->
+  forall img c1 c2,
+  get_pixel img c1 = true -> get_pixel img c2 = true ->
+  adj c1 c2 = true -> in_bounds img c1 = true -> in_bounds img c2 = true ->
+  uf_same_set (equiv (ccl_pass img adj cn))
+              (labels (ccl_pass img adj cn) c1) (labels (ccl_pass img adj cn) c2) = true.
+Proof.
+  intros adj cn Hcompat img c1 c2 Hfg1 Hfg2 Hadj Hbound1 Hbound2.
+  assert (Hcopy := Hcompat). destruct Hcopy as [Hsym [_ _]].
+  destruct (coord_eq_dec c1 c2) as [Heq | Hneq].
+  - subst c2. apply uf_same_set_refl.
+  - destruct (raster_lt_total c1 c2 Hneq) as [Hc1first | Hc2first].
+    + apply (adjacent_first_before_second_g adj cn Hcompat img c1 c2 Hfg1 Hfg2 Hadj Hc1first Hbound1 Hbound2).
+    + rewrite uf_same_set_sym.
+      assert (Hadj' : adj c2 c1 = true) by (rewrite Hsym; exact Hadj).
+      apply (adjacent_first_before_second_g adj cn Hcompat img c2 c1 Hfg2 Hfg1 Hadj' Hc2first Hbound2 Hbound1).
+Qed.
+
+Lemma ccl_algorithm_preserves_equivalences_g : forall adj cn img c1 c2,
+  get_pixel img c1 = true -> get_pixel img c2 = true ->
+  in_bounds img c1 = true -> in_bounds img c2 = true ->
+  uf_same_set (equiv (ccl_pass img adj cn))
+              (labels (ccl_pass img adj cn) c1) (labels (ccl_pass img adj cn) c2) = true ->
+  ccl_algorithm img adj cn c1 = ccl_algorithm img adj cn c2.
+Proof.
+  intros adj cn img c1 c2 Hfg1 Hfg2 Hbound1 Hbound2 Hequiv.
+  unfold ccl_algorithm. cbv zeta.
+  assert (Hpos1 : labels (ccl_pass img adj cn) c1 > 0) by (apply ccl_pass_labels_foreground; assumption).
+  assert (Hpos2 : labels (ccl_pass img adj cn) c2 > 0) by (apply ccl_pass_labels_foreground; assumption).
+  apply compact_resolved_preserves_equiv; assumption.
+Qed.
+
+Lemma connected_same_label_g : forall adj cn, adj_compatible adj cn ->
+  forall img c1 c2,
+  connected img adj c1 c2 ->
+  ccl_algorithm img adj cn c1 = ccl_algorithm img adj cn c2.
+Proof.
+  intros adj cn Hcompat img c1 c2 Hconn.
+  induction Hconn as [c Hfg | c1 c2 c3 Hconn12 IH Hfg3 Hadj23].
+  - reflexivity.
+  - assert (Hbounds12 := connected_both_in_bounds img adj c1 c2 Hconn12).
+    destruct Hbounds12 as [Hbound1 Hbound2].
+    assert (Hbound3 : in_bounds img c3 = true) by (apply foreground_in_bounds; exact Hfg3).
+    assert (Hfg2 : get_pixel img c2 = true).
+    { apply connected_foreground in Hconn12. destruct Hconn12. assumption. }
+    assert (Hequiv23 : uf_same_set (equiv (ccl_pass img adj cn))
+                         (labels (ccl_pass img adj cn) c2) (labels (ccl_pass img adj cn) c3) = true).
+    { apply (adjacent_equiv_after_pass_g adj cn Hcompat); assumption. }
+    transitivity (ccl_algorithm img adj cn c2).
+    + apply IH.
+    + apply (ccl_algorithm_preserves_equivalences_g adj cn); assumption.
+Qed.
+
+(** ** 8-Connectivity Correctness (by instantiating the generic bridge) *)
+
+Lemma adjacent_8_compatible : adj_compatible adjacent_8 check_prior_neighbors_8.
+Proof.
+  unfold adj_compatible. split; [| split].
+  - apply adjacent_8_sym.
+  - apply check_prior_neighbors_8_sound.
+  - apply check_prior_neighbors_8_complete.
+Qed.
+
+Theorem ccl_8_foreground_positive : forall img c,
+  get_pixel img c = true -> ccl_8 img c > 0.
+Proof.
+  intros img c Hfg. unfold ccl_8.
+  apply (foreground_positive_g adjacent_8 check_prior_neighbors_8 img c Hfg).
+Qed.
+
+Theorem connected_pixels_same_label_8 : forall img c1 c2,
+  connected img adjacent_8 c1 c2 -> ccl_8 img c1 = ccl_8 img c2.
+Proof.
+  intros img c1 c2 Hconn. unfold ccl_8.
+  apply (connected_same_label_g adjacent_8 check_prior_neighbors_8 adjacent_8_compatible img c1 c2 Hconn).
+Qed.
+
+Theorem ccl_8_complete : forall img c1 c2,
+  ccl_8 img c1 = ccl_8 img c2 ->
+  ccl_8 img c1 > 0 ->
+  connected img adjacent_8 c1 c2.
+Proof.
+  intros img c1 c2 Heq Hpos.
+  assert (Hfg1 : get_pixel img c1 = true).
+  { destruct (get_pixel img c1) eqn:E; [reflexivity|].
+    rewrite (ccl_8_background img c1 E) in Hpos. lia. }
+  assert (Hfg2 : get_pixel img c2 = true).
+  { destruct (get_pixel img c2) eqn:E; [reflexivity|].
+    rewrite (ccl_8_background img c2 E) in Heq. rewrite Heq in Hpos. lia. }
+  apply (ccl_pass_uf_implies_connected_g adjacent_8 check_prior_neighbors_8 adjacent_8_compatible);
+    [exact Hfg1 | exact Hfg2 |].
+  unfold uf_same_set. apply Nat.eqb_eq.
+  unfold ccl_8, ccl_algorithm, compact_labels, resolve_labels in Heq, Hpos.
+  cbv zeta in Heq, Hpos.
+  pose proof (ccl_pass_idempotent img adjacent_8 check_prior_neighbors_8
+                (labels (ccl_pass img adjacent_8 check_prior_neighbors_8) c1)) as Hid1.
+  pose proof (ccl_pass_idempotent img adjacent_8 check_prior_neighbors_8
+                (labels (ccl_pass img adjacent_8 check_prior_neighbors_8) c2)) as Hid2.
+  cbv zeta in Hid1, Hid2.
+  rewrite <- Hid1, <- Hid2.
+  apply (build_label_map_inj_rep _ _ _ _ Heq). lia.
+Qed.
+
+(** [ccl_8] satisfies the full [correct_labeling] specification. *)
+Theorem ccl_8_correct : forall img, correct_labeling img adjacent_8 (ccl_8 img).
+Proof.
+  intro img. constructor.
+  - exact (ccl_8_background img).
+  - exact (ccl_8_foreground_positive img).
+  - exact (connected_pixels_same_label_8 img).
+  - exact (ccl_8_complete img).
+Qed.
+
 (** ** Zero Is Never Used for Foreground *)
 Theorem ccl_4_zero_only_background : forall img,
   let final_labeling := ccl_4 img in
