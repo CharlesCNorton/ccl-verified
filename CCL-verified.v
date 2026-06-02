@@ -9089,6 +9089,851 @@ Proof.
         rewrite (ufind_of_root _ rx (S F) Hrrx). reflexivity.
 Qed.
 
+(** * Refinement: the efficient union-by-rank forest realizes the abstract
+    union-find and powers a verified efficient CCL ([ccl_4_fast]/[ccl_8_fast]). *)
+
+(** The rank-monotone invariant under which [ufind] terminates at a root. *)
+Definition ufr_ok (u : ufr) : Prop :=
+  forall z, upar u z = z \/ urnk u z < urnk u (upar u z).
+
+(** The canonical root of [z], computed with enough fuel ([S maxrank]). *)
+Definition Root (u : ufr) (z : nat) : nat := ufind u (S (ufr_maxrank u)) z.
+
+Lemma Root_is_root : forall u z, ufr_ok u -> uroot u (Root u z) = true.
+Proof. intros u z Hok. unfold Root. apply ufind_root_mr. exact Hok. Qed.
+
+(** Extra fuel beyond what reaches a root changes nothing. *)
+Lemma ufind_stable : forall (u : ufr) f x,
+  uroot u (ufind u f x) = true ->
+  forall g, f <= g -> ufind u g x = ufind u f x.
+Proof.
+  intros u f. induction f as [|f IH]; intros x Hroot g Hg.
+  - destruct g as [|g]; [reflexivity|].
+    simpl in Hroot |- *. rewrite Hroot. reflexivity.
+  - destruct g as [|g]; [lia|].
+    simpl. simpl in Hroot.
+    destruct (uroot u x) eqn:Hr.
+    + reflexivity.
+    + apply IH; [exact Hroot | lia].
+Qed.
+
+(** Any adequate fuel computes the canonical root. *)
+Lemma ufind_adequate_eq : forall u z G,
+  ufr_ok u -> S (ufr_maxrank u) <= G -> ufind u G z = Root u z.
+Proof.
+  intros u z G Hok HG.
+  pose proof (Root_is_root u z Hok) as HR. unfold Root in HR |- *.
+  apply ufind_stable; [exact HR | exact HG].
+Qed.
+
+(** Key forest lemma. If [u'] differs from [u] only by sending the single root
+    [d] to another root [s], then [ufind] in [u'] equals [ufind] in [u] with the
+    old root [d] redirected to [s]. *)
+Lemma demote_find_adq : forall (u u' : ufr) (d s : nat),
+  (forall z, upar u' z = (if Nat.eqb z d then s else upar u z)) ->
+  upar u d = d -> upar u s = s -> s <> d ->
+  forall F z, uroot u (ufind u F z) = true ->
+  ufind u' (S F) z = (if Nat.eqb (ufind u F z) d then s else ufind u F z).
+Proof.
+  intros u u' d s Hpar Hd Hs Hsd.
+  (* parent of u' off [d] agrees with u *)
+  assert (Hpar_ne : forall z, z <> d -> upar u' z = upar u z).
+  { intros z0 Hz0. rewrite Hpar. destruct (Nat.eqb z0 d) eqn:E.
+    - apply Nat.eqb_eq in E. contradiction.
+    - reflexivity. }
+  assert (Hpd : upar u' d = s) by (rewrite Hpar, Nat.eqb_refl; reflexivity).
+  assert (Hru'd : uroot u' d = false).
+  { unfold uroot. rewrite Hpd. apply Nat.eqb_neq. exact Hsd. }
+  assert (Hus : uroot u' s = true).
+  { unfold uroot. rewrite (Hpar_ne s Hsd), Hs. apply Nat.eqb_refl. }
+  assert (Hkeeproot : forall z, z <> d -> upar u z = z -> uroot u' z = true).
+  { intros z0 Hzd Hz0. unfold uroot. rewrite (Hpar_ne z0 Hzd), Hz0. apply Nat.eqb_refl. }
+  induction F as [|F IH]; intros z HF.
+  - cbn [ufind] in HF |- *.
+    destruct (Nat.eqb z d) eqn:Ezd.
+    + apply Nat.eqb_eq in Ezd. subst z. rewrite Hru'd, Hpd. reflexivity.
+    + apply Nat.eqb_neq in Ezd.
+      unfold uroot in HF. apply Nat.eqb_eq in HF.
+      rewrite (Hkeeproot z Ezd HF). reflexivity.
+  - rewrite ufind_step.
+    destruct (uroot u z) eqn:Hruz.
+    + assert (Hfindz : ufind u (S F) z = z) by (rewrite ufind_step, Hruz; reflexivity).
+      rewrite Hfindz.
+      destruct (Nat.eqb z d) eqn:Ezd.
+      * apply Nat.eqb_eq in Ezd. subst z.
+        rewrite Hru'd, Hpd. apply ufind_of_root. exact Hus.
+      * apply Nat.eqb_neq in Ezd.
+        unfold uroot in Hruz. apply Nat.eqb_eq in Hruz.
+        rewrite (Hkeeproot z Ezd Hruz). reflexivity.
+    + assert (Hzd : z <> d).
+      { intro Heq. subst z. unfold uroot in Hruz. rewrite Hd, Nat.eqb_refl in Hruz. discriminate. }
+      assert (Hfindz : ufind u (S F) z = ufind u F (upar u z)) by (rewrite ufind_step, Hruz; reflexivity).
+      rewrite Hfindz. rewrite Hfindz in HF.
+      assert (Hru'z : uroot u' z = false).
+      { unfold uroot. rewrite (Hpar_ne z Hzd). exact Hruz. }
+      rewrite Hru'z, (Hpar_ne z Hzd).
+      apply IH. exact HF.
+Qed.
+
+(** Lift [demote_find_adq] to canonical roots. *)
+Lemma Root_demote : forall (u u' : ufr) (d s : nat),
+  ufr_ok u -> ufr_ok u' ->
+  (forall z, upar u' z = (if Nat.eqb z d then s else upar u z)) ->
+  upar u d = d -> upar u s = s -> s <> d ->
+  forall z, Root u' z = (if Nat.eqb (Root u z) d then s else Root u z).
+Proof.
+  intros u u' d s Hok Hok' Hpar Hd Hs Hsd z.
+  set (G := S (ufr_maxrank u + ufr_maxrank u')).
+  assert (HGu : S (ufr_maxrank u) <= G) by (unfold G; lia).
+  assert (HGu' : S (ufr_maxrank u') <= S G) by (unfold G; lia).
+  assert (Hfu : ufind u G z = Root u z) by (apply ufind_adequate_eq; assumption).
+  assert (Hroot_uGz : uroot u (ufind u G z) = true).
+  { rewrite Hfu. apply Root_is_root. exact Hok. }
+  pose proof (demote_find_adq u u' d s Hpar Hd Hs Hsd G z Hroot_uGz) as Hd'.
+  rewrite Hfu in Hd'.
+  assert (Hfu' : ufind u' (S G) z = Root u' z) by (apply ufind_adequate_eq; assumption).
+  rewrite Hfu' in Hd'. exact Hd'.
+Qed.
+
+From Stdlib Require Import Btauto.
+
+(** Same-set after substituting the demoted root [d] by survivor [s]. *)
+Lemma subst_eqb : forall d s a b,
+  Nat.eqb (if Nat.eqb a d then s else a) (if Nat.eqb b d then s else b)
+  = (Nat.eqb a b || ((Nat.eqb a d || Nat.eqb a s) && (Nat.eqb b d || Nat.eqb b s)))%bool.
+Proof.
+  intros d s a b.
+  destruct (Nat.eqb a d) eqn:Ead; destruct (Nat.eqb b d) eqn:Ebd; simpl;
+  destruct (Nat.eqb a b) eqn:Eab; destruct (Nat.eqb a s) eqn:Eas;
+  destruct (Nat.eqb b s) eqn:Ebs; simpl;
+  repeat match goal with
+  | [ H : Nat.eqb _ _ = true |- _ ] => apply Nat.eqb_eq in H
+  | [ H : Nat.eqb _ _ = false |- _ ] => apply Nat.eqb_neq in H
+  end; subst;
+  repeat match goal with
+  | [ |- context[Nat.eqb ?x ?y] ] => destruct (Nat.eqb x y) eqn:?H
+  end;
+  repeat match goal with
+  | [ H : Nat.eqb _ _ = true |- _ ] => apply Nat.eqb_eq in H
+  | [ H : Nat.eqb _ _ = false |- _ ] => apply Nat.eqb_neq in H
+  end; subst; try reflexivity; try congruence.
+Qed.
+
+(** Same-set after one abstract union, in terms of the prior partition. *)
+Lemma uf_union_sameset_char : forall (a : uf) m l x y,
+  uf_same_set (uf_union a m l) x y
+  = (uf_same_set a x y
+     || ((uf_same_set a x m || uf_same_set a x l)
+         && (uf_same_set a y m || uf_same_set a y l)))%bool.
+Proof.
+  intros a m l x y. unfold uf_same_set.
+  rewrite (uf_find_after_union a m l x).
+  rewrite (uf_find_after_union a m l y).
+  set (P := uf_find a m). set (Q := uf_find a l).
+  set (U := uf_find a x). set (V := uf_find a y).
+  destruct (Nat.eqb P U) eqn:EPU; destruct (Nat.eqb P V) eqn:EPV; simpl;
+  repeat match goal with
+  | [ |- context[Nat.eqb ?x ?y] ] => destruct (Nat.eqb x y) eqn:?H
+  end;
+  repeat match goal with
+  | [ H : Nat.eqb _ _ = true |- _ ] => apply Nat.eqb_eq in H
+  | [ H : Nat.eqb _ _ = false |- _ ] => apply Nat.eqb_neq in H
+  end; subst; try reflexivity; try congruence.
+Qed.
+
+(** Initial-state facts: the empty forest is well-formed and its root map is the
+    identity, matching [uf_init]. *)
+Lemma ufr_ok_empty : ufr_ok (mkUfr [] []).
+Proof. intro z. left. unfold upar, ufr_lookup. simpl. reflexivity. Qed.
+
+Lemma Root_empty : forall z, Root (mkUfr [] []) z = z.
+Proof.
+  intro z. unfold Root. apply ufind_of_root.
+  unfold uroot, upar, ufr_lookup. simpl. apply Nat.eqb_refl.
+Qed.
+
+Lemma ufr_refines_init : forall x y,
+  uf_same_set uf_init x y = Nat.eqb (Root (mkUfr [] []) x) (Root (mkUfr [] []) y).
+Proof.
+  intros x y. rewrite !Root_empty. unfold uf_same_set, uf_find, uf_init. reflexivity.
+Qed.
+
+(** Parent map after [uunion], by branch. *)
+Lemma upar_uunion : forall u fuel m l z,
+  upar (uunion u fuel m l) z =
+    (if Nat.eqb (ufind u fuel m) (ufind u fuel l) then upar u z
+     else if Nat.ltb (urnk u (ufind u fuel m)) (urnk u (ufind u fuel l))
+          then (if Nat.eqb z (ufind u fuel m) then ufind u fuel l else upar u z)
+          else (if Nat.eqb z (ufind u fuel l) then ufind u fuel m else upar u z)).
+Proof.
+  intros u fuel m l z. unfold uunion. cbv zeta.
+  destruct (Nat.eqb (ufind u fuel m) (ufind u fuel l)) eqn:E; [reflexivity|].
+  destruct (Nat.ltb (urnk u (ufind u fuel m)) (urnk u (ufind u fuel l))) eqn:E1.
+  - rewrite upar_cons. rewrite (Nat.eqb_sym (ufind u fuel m) z). reflexivity.
+  - destruct (Nat.ltb (urnk u (ufind u fuel l)) (urnk u (ufind u fuel m))) eqn:E2.
+    + rewrite upar_cons. rewrite (Nat.eqb_sym (ufind u fuel l) z). reflexivity.
+    + rewrite upar_cons. rewrite (Nat.eqb_sym (ufind u fuel l) z). reflexivity.
+Qed.
+
+(** One-union refinement: [uunion] induces the same partition as [uf_union] on
+    the abstraction [Root u]. *)
+Lemma ufr_refines_union : forall u m l, ufr_ok u ->
+  forall x y,
+  uf_same_set (uf_union (Root u) m l) x y
+  = Nat.eqb (Root (uunion u (S (ufr_maxrank u)) m l) x)
+            (Root (uunion u (S (ufr_maxrank u)) m l) y).
+Proof.
+  intros u m l Hok x y.
+  set (fuel := S (ufr_maxrank u)).
+  set (u' := uunion u fuel m l).
+  assert (Hrm_root : uroot u (ufind u fuel m) = true) by exact (Root_is_root u m Hok).
+  assert (Hrl_root : uroot u (ufind u fuel l) = true) by exact (Root_is_root u l Hok).
+  assert (Hparm : upar u (ufind u fuel m) = ufind u fuel m).
+  { unfold uroot in Hrm_root. apply Nat.eqb_eq in Hrm_root. exact Hrm_root. }
+  assert (Hparl : upar u (ufind u fuel l) = ufind u fuel l).
+  { unfold uroot in Hrl_root. apply Nat.eqb_eq in Hrl_root. exact Hrl_root. }
+  assert (Hok' : ufr_ok u').
+  { unfold u', ufr_ok. apply uunion_preserves_rankmono; assumption. }
+  destruct (Nat.eqb (ufind u fuel m) (ufind u fuel l)) eqn:Erxry.
+  - (* roots equal: union is a no-op on the partition *)
+    assert (HRml : Root u m = Root u l) by (unfold Root; apply Nat.eqb_eq; exact Erxry).
+    assert (Hu'u : u' = u).
+    { unfold u', uunion. cbv zeta. rewrite Erxry. reflexivity. }
+    rewrite Hu'u.
+    assert (Hcollapse : forall z, uf_find (uf_union (Root u) m l) z = Root u z).
+    { intro z. rewrite uf_find_after_union.
+      destruct (Nat.eqb (uf_find (Root u) m) (uf_find (Root u) z)) eqn:Ez.
+      - apply Nat.eqb_eq in Ez. unfold uf_find in *. rewrite <- Ez. symmetry. exact HRml.
+      - unfold uf_find. reflexivity. }
+    unfold uf_same_set. rewrite !Hcollapse. reflexivity.
+  - (* roots distinct: a genuine merge *)
+    apply Nat.eqb_neq in Erxry.
+    rewrite uf_union_sameset_char.
+    destruct (Nat.ltb (urnk u (ufind u fuel m)) (urnk u (ufind u fuel l))) eqn:Elt.
+    + assert (Hpar' : forall z, upar u' z =
+        (if Nat.eqb z (ufind u fuel m) then ufind u fuel l else upar u z)).
+      { intro z. unfold u'. rewrite upar_uunion.
+        rewrite (proj2 (Nat.eqb_neq _ _) Erxry). rewrite Elt. reflexivity. }
+      rewrite (Root_demote u u' (ufind u fuel m) (ufind u fuel l)
+                 Hok Hok' Hpar' Hparm Hparl (not_eq_sym Erxry) x).
+      rewrite (Root_demote u u' (ufind u fuel m) (ufind u fuel l)
+                 Hok Hok' Hpar' Hparm Hparl (not_eq_sym Erxry) y).
+      rewrite subst_eqb. unfold uf_same_set, uf_find.
+      change (Root u m) with (ufind u fuel m). change (Root u l) with (ufind u fuel l).
+      btauto.
+    + assert (Hpar' : forall z, upar u' z =
+        (if Nat.eqb z (ufind u fuel l) then ufind u fuel m else upar u z)).
+      { intro z. unfold u'. rewrite upar_uunion.
+        rewrite (proj2 (Nat.eqb_neq _ _) Erxry). rewrite Elt. reflexivity. }
+      rewrite (Root_demote u u' (ufind u fuel l) (ufind u fuel m)
+                 Hok Hok' Hpar' Hparl Hparm Erxry x).
+      rewrite (Root_demote u u' (ufind u fuel l) (ufind u fuel m)
+                 Hok Hok' Hpar' Hparl Hparm Erxry y).
+      rewrite subst_eqb. unfold uf_same_set, uf_find.
+      change (Root u m) with (ufind u fuel m). change (Root u l) with (ufind u fuel l).
+      btauto.
+Qed.
+
+(** uf_union's partition depends on its argument only through that argument's
+    partition. *)
+Lemma uf_union_partition_cong : forall (a b : uf) m l,
+  (forall x y, uf_same_set a x y = uf_same_set b x y) ->
+  forall x y, uf_same_set (uf_union a m l) x y = uf_same_set (uf_union b m l) x y.
+Proof.
+  intros a b m l Hsame x y.
+  rewrite !uf_union_sameset_char. rewrite !Hsame. reflexivity.
+Qed.
+
+(** The simulation invariant tying an abstract union-find to a forest:
+    well-formedness plus partition agreement. *)
+Definition Sim (a : uf) (F : ufr) : Prop :=
+  ufr_ok F /\ (forall x y, uf_same_set a x y = Nat.eqb (Root F x) (Root F y)).
+
+(** Forest counterpart of [record_adjacency]. *)
+Definition record_adjacency_f (F : ufr) (m l : nat) : ufr :=
+  if andb (negb (Nat.eqb m 0)) (negb (Nat.eqb l 0)) then
+    if Nat.eqb m l then F else uunion F (S (ufr_maxrank F)) m l
+  else F.
+
+Lemma Sim_init : Sim uf_init (mkUfr [] []).
+Proof. split; [apply ufr_ok_empty | apply ufr_refines_init]. Qed.
+
+Lemma Sim_record_adjacency : forall a F m l,
+  Sim a F -> Sim (record_adjacency a m l) (record_adjacency_f F m l).
+Proof.
+  intros a F m l [Hok Hpart].
+  unfold record_adjacency, record_adjacency_f.
+  destruct (andb (negb (Nat.eqb m 0)) (negb (Nat.eqb l 0))) eqn:Hnz.
+  - destruct (Nat.eqb m l) eqn:Hml.
+    + split; [exact Hok | exact Hpart].
+    + split.
+      * unfold ufr_ok. apply uunion_preserves_rankmono;
+          [ exact Hok | exact (Root_is_root F m Hok) | exact (Root_is_root F l Hok) ].
+      * intros x y.
+        rewrite <- (ufr_refines_union F m l Hok x y).
+        apply uf_union_partition_cong.
+        intros x0 y0. rewrite Hpart. unfold uf_same_set, uf_find. reflexivity.
+  - split; [exact Hok | exact Hpart].
+Qed.
+
+(** Folding [record_adjacency] vs [record_adjacency_f] over the same labels
+    preserves the simulation. *)
+Lemma Sim_fold_record_adjacency : forall ls m a F,
+  Sim a F ->
+  Sim (fold_left (fun u l' => record_adjacency u m l') ls a)
+      (fold_left (fun G l' => record_adjacency_f G m l') ls F).
+Proof.
+  induction ls as [|x xs IH]; intros m a F HSim; simpl.
+  - exact HSim.
+  - apply IH. apply Sim_record_adjacency. exact HSim.
+Qed.
+
+(** Forest-backed CCL state and pass, mirroring [ccl_state]/[ccl_pass] but with a
+    union-by-rank forest for the equivalence structure. *)
+Record cclF : Type := mkCclF { labelsF : labeling; equivF : ufr; nextF : nat }.
+
+Definition initF : cclF := mkCclF empty_labeling (mkUfr [] []) 1.
+
+Definition process_pixel_f (img : image) (adj : coord -> coord -> bool)
+                          (check_neighbors : image -> coord -> list coord)
+                          (s : cclF) (c : coord) : cclF :=
+  if get_pixel img c then
+    let neighbors := check_neighbors img c in
+    let neighbor_labels := map (labelsF s) neighbors in
+    let positive_labels := filter (fun l => negb (Nat.eqb l 0)) neighbor_labels in
+    match positive_labels with
+    | [] =>
+        mkCclF
+          (fun c' => if coord_eqb c c' then nextF s else labelsF s c')
+          (equivF s)
+          (S (nextF s))
+    | l :: rest =>
+        let min_label := fold_left Nat.min rest l in
+        let new_equiv := fold_left (fun G l' => record_adjacency_f G min_label l')
+                                   positive_labels (equivF s) in
+        mkCclF
+          (fun c' => if coord_eqb c c' then min_label else labelsF s c')
+          new_equiv
+          (nextF s)
+    end
+  else s.
+
+Definition ccl_pass_f (img : image) (adj : coord -> coord -> bool)
+                      (check_neighbors : image -> coord -> list coord) : cclF :=
+  fold_left (process_pixel_f img adj check_neighbors) (all_coords img) initF.
+
+(** The combined invariant relating the abstract and forest passes. *)
+Definition InvF (s : ccl_state) (sf : cclF) : Prop :=
+  labels s = labelsF sf /\ next_label s = nextF sf /\ Sim (equiv s) (equivF sf).
+
+Lemma InvF_step : forall img adj cn s sf c,
+  InvF s sf -> InvF (process_pixel img adj cn s c) (process_pixel_f img adj cn sf c).
+Proof.
+  intros img adj cn s sf c HInv. unfold InvF in HInv. destruct HInv as [Hlab [Hnext Hsim]].
+  unfold InvF, process_pixel, process_pixel_f.
+  destruct (get_pixel img c) eqn:Hpix.
+  - rewrite <- Hlab, <- Hnext.
+    destruct (filter (fun l => negb (Nat.eqb l 0)) (map (labels s) (cn img c))) as [|l rest] eqn:Hf.
+    + split; [reflexivity | split; [reflexivity | exact Hsim]].
+    + split; [reflexivity | split; [reflexivity | apply Sim_fold_record_adjacency; exact Hsim]].
+  - split; [exact Hlab | split; [exact Hnext | exact Hsim]].
+Qed.
+
+Lemma InvF_fold : forall img adj cn coords s sf,
+  InvF s sf ->
+  InvF (fold_left (process_pixel img adj cn) coords s)
+       (fold_left (process_pixel_f img adj cn) coords sf).
+Proof.
+  intros img adj cn coords. induction coords as [|c cs IH]; intros s sf H.
+  - exact H.
+  - simpl. apply IH. apply InvF_step. exact H.
+Qed.
+
+Lemma InvF_pass : forall img adj cn, InvF (ccl_pass img adj cn) (ccl_pass_f img adj cn).
+Proof.
+  intros img adj cn. unfold ccl_pass, ccl_pass_f. apply InvF_fold.
+  unfold InvF, initial_state, initF. simpl.
+  split; [reflexivity | split; [reflexivity | apply Sim_init]].
+Qed.
+
+(** Canonical root is idempotent. *)
+Lemma Root_idem : forall u z, ufr_ok u -> Root u (Root u z) = Root u z.
+Proof. intros u z Hok. unfold Root at 1. apply ufind_of_root. apply Root_is_root. exact Hok. Qed.
+
+(** Precise description of the root map after one [uunion]: either unchanged
+    (roots coincided) or the demoted root [d] is redirected to survivor [s], with
+    [{d,s} = {Root m, Root l}]. *)
+Lemma Root_uunion_form : forall u m l, ufr_ok u ->
+  (forall z, Root (uunion u (S (ufr_maxrank u)) m l) z = Root u z)
+  \/ (exists d s, ((d = Root u m /\ s = Root u l) \/ (d = Root u l /\ s = Root u m))
+        /\ (forall z, Root (uunion u (S (ufr_maxrank u)) m l) z
+                     = if Nat.eqb (Root u z) d then s else Root u z)).
+Proof.
+  intros u m l Hok.
+  set (fuel := S (ufr_maxrank u)). set (u' := uunion u fuel m l).
+  assert (Hrm_root : uroot u (ufind u fuel m) = true) by exact (Root_is_root u m Hok).
+  assert (Hrl_root : uroot u (ufind u fuel l) = true) by exact (Root_is_root u l Hok).
+  assert (Hparm : upar u (ufind u fuel m) = ufind u fuel m)
+    by (unfold uroot in Hrm_root; apply Nat.eqb_eq in Hrm_root; exact Hrm_root).
+  assert (Hparl : upar u (ufind u fuel l) = ufind u fuel l)
+    by (unfold uroot in Hrl_root; apply Nat.eqb_eq in Hrl_root; exact Hrl_root).
+  assert (Hok' : ufr_ok u') by (unfold u', ufr_ok; apply uunion_preserves_rankmono; assumption).
+  destruct (Nat.eqb (ufind u fuel m) (ufind u fuel l)) eqn:Erxry.
+  - left. intro z. unfold u', uunion. cbv zeta. rewrite Erxry. reflexivity.
+  - apply Nat.eqb_neq in Erxry. right.
+    destruct (Nat.ltb (urnk u (ufind u fuel m)) (urnk u (ufind u fuel l))) eqn:Elt.
+    + exists (Root u m), (Root u l). split; [left; split; reflexivity | intro z].
+      assert (Hpar' : forall w, upar u' w =
+        (if Nat.eqb w (ufind u fuel m) then ufind u fuel l else upar u w))
+        by (intro w; unfold u'; rewrite upar_uunion;
+            rewrite (proj2 (Nat.eqb_neq _ _) Erxry); rewrite Elt; reflexivity).
+      change (Root u m) with (ufind u fuel m). change (Root u l) with (ufind u fuel l).
+      apply (Root_demote u u' (ufind u fuel m) (ufind u fuel l)
+               Hok Hok' Hpar' Hparm Hparl (not_eq_sym Erxry) z).
+    + exists (Root u l), (Root u m). split; [right; split; reflexivity | intro z].
+      assert (Hpar' : forall w, upar u' w =
+        (if Nat.eqb w (ufind u fuel l) then ufind u fuel m else upar u w))
+        by (intro w; unfold u'; rewrite upar_uunion;
+            rewrite (proj2 (Nat.eqb_neq _ _) Erxry); rewrite Elt; reflexivity).
+      change (Root u m) with (ufind u fuel m). change (Root u l) with (ufind u fuel l).
+      apply (Root_demote u u' (ufind u fuel l) (ufind u fuel m)
+               Hok Hok' Hpar' Hparl Hparm Erxry z).
+Qed.
+
+(** [uunion]'s root of any node is one of: the old root, [Root m], or [Root l]. *)
+Lemma Root_uunion_in : forall u m l z, ufr_ok u ->
+  Root (uunion u (S (ufr_maxrank u)) m l) z = Root u z
+  \/ Root (uunion u (S (ufr_maxrank u)) m l) z = Root u m
+  \/ Root (uunion u (S (ufr_maxrank u)) m l) z = Root u l.
+Proof.
+  intros u m l z Hok. destruct (Root_uunion_form u m l Hok) as [Hsame | [d [s [Hds Hform]]]].
+  - left. apply Hsame.
+  - rewrite Hform. destruct (Nat.eqb (Root u z) d).
+    + destruct Hds as [[_ Hs]|[_ Hs]]; rewrite Hs; [right;right;reflexivity | right;left;reflexivity].
+    + left. reflexivity.
+Qed.
+
+(** Background label invariant on the forest: 0 stays its own root, and no
+    nonzero label has root 0. *)
+Definition RZ (F : ufr) : Prop := Root F 0 = 0 /\ (forall z, z <> 0 -> Root F z <> 0).
+
+Lemma ufrok_record_f : forall F m l, ufr_ok F -> ufr_ok (record_adjacency_f F m l).
+Proof.
+  intros F m l Hok. unfold record_adjacency_f.
+  destruct (andb (negb (Nat.eqb m 0)) (negb (Nat.eqb l 0))).
+  - destruct (Nat.eqb m l); [exact Hok|].
+    unfold ufr_ok. apply uunion_preserves_rankmono;
+      [ exact Hok | exact (Root_is_root F m Hok) | exact (Root_is_root F l Hok) ].
+  - exact Hok.
+Qed.
+
+Lemma RZ_record_f : forall F m l, ufr_ok F -> RZ F -> RZ (record_adjacency_f F m l).
+Proof.
+  intros F m l Hok [HZ HR]. unfold record_adjacency_f.
+  destruct (andb (negb (Nat.eqb m 0)) (negb (Nat.eqb l 0))) eqn:Hnz.
+  - destruct (Nat.eqb m l) eqn:Hml; [split; assumption|].
+    apply andb_prop in Hnz. destruct Hnz as [Hm0 Hl0].
+    destruct (Nat.eqb m 0) eqn:Em; simpl in Hm0; [discriminate|].
+    destruct (Nat.eqb l 0) eqn:El; simpl in Hl0; [discriminate|].
+    apply Nat.eqb_neq in Em. apply Nat.eqb_neq in El.
+    destruct (Root_uunion_form F m l Hok) as [Hsame | [d [s [Hds Hform]]]].
+    + split; [rewrite Hsame; exact HZ | intros z Hz; rewrite Hsame; apply HR; exact Hz].
+    + assert (Hd0 : d <> 0) by (destruct Hds as [[Hd _]|[Hd _]]; rewrite Hd; apply HR; assumption).
+      assert (Hs0 : s <> 0) by (destruct Hds as [[_ Hs]|[_ Hs]]; rewrite Hs; apply HR; assumption).
+      split.
+      * rewrite Hform, HZ. destruct (Nat.eqb 0 d) eqn:E0.
+        -- apply Nat.eqb_eq in E0. symmetry in E0. contradiction.
+        -- reflexivity.
+      * intros z Hz. rewrite Hform. destruct (Nat.eqb (Root F z) d);
+          [exact Hs0 | apply HR; exact Hz].
+  - split; assumption.
+Qed.
+
+Lemma RZ_fold_record_f : forall ls m F, ufr_ok F -> RZ F ->
+  ufr_ok (fold_left (fun G l' => record_adjacency_f G m l') ls F)
+  /\ RZ (fold_left (fun G l' => record_adjacency_f G m l') ls F).
+Proof.
+  induction ls as [|x xs IH]; intros m F Hok HRZ; simpl.
+  - split; assumption.
+  - apply IH; [apply ufrok_record_f; assumption | apply RZ_record_f; assumption].
+Qed.
+
+(** The forest component after one fast pixel is either unchanged or a fold of
+    [record_adjacency_f] over the positive neighbour labels. *)
+Lemma equivF_pp_cases : forall img adj cn sf c,
+  equivF (process_pixel_f img adj cn sf c) = equivF sf
+  \/ (exists m ls, equivF (process_pixel_f img adj cn sf c)
+        = fold_left (fun G l' => record_adjacency_f G m l') ls (equivF sf)).
+Proof.
+  intros img adj cn sf c. unfold process_pixel_f. destruct (get_pixel img c).
+  - destruct (filter (fun l => negb (Nat.eqb l 0)) (map (labelsF sf) (cn img c))) as [|l rest].
+    + left. reflexivity.
+    + right. exists (fold_left Nat.min rest l), (l :: rest). reflexivity.
+  - left. reflexivity.
+Qed.
+
+Lemma GoodRZ_step : forall img adj cn sf c,
+  ufr_ok (equivF sf) -> RZ (equivF sf) ->
+  ufr_ok (equivF (process_pixel_f img adj cn sf c))
+  /\ RZ (equivF (process_pixel_f img adj cn sf c)).
+Proof.
+  intros img adj cn sf c Hok HRZ.
+  destruct (equivF_pp_cases img adj cn sf c) as [He | [m [ls He]]]; rewrite He.
+  - split; assumption.
+  - apply RZ_fold_record_f; assumption.
+Qed.
+
+Lemma GoodRZ_fold : forall img adj cn coords sf,
+  ufr_ok (equivF sf) -> RZ (equivF sf) ->
+  ufr_ok (equivF (fold_left (process_pixel_f img adj cn) coords sf))
+  /\ RZ (equivF (fold_left (process_pixel_f img adj cn) coords sf)).
+Proof.
+  intros img adj cn coords. induction coords as [|c cs IH]; intros sf Hok HRZ; simpl.
+  - split; assumption.
+  - destruct (GoodRZ_step img adj cn sf c Hok HRZ) as [Hok' HRZ']. apply IH; assumption.
+Qed.
+
+Lemma RZ_pass : forall img adj cn,
+  ufr_ok (equivF (ccl_pass_f img adj cn)) /\ RZ (equivF (ccl_pass_f img adj cn)).
+Proof.
+  intros img adj cn. unfold ccl_pass_f. apply GoodRZ_fold.
+  - unfold initF; simpl; apply ufr_ok_empty.
+  - unfold initF; simpl; unfold RZ; split;
+      [ apply Root_empty | intros z Hz; rewrite Root_empty; exact Hz ].
+Qed.
+
+(** ** The efficient algorithm and its correctness *)
+
+(** The fast labeling: run the forest pass, then reuse the verified abstract
+    post-processing on the forest's root map [Root (equivF F)] (a [uf]). *)
+Definition ccl_algorithm_f (img : image) (adj : coord -> coord -> bool)
+                          (cn : image -> coord -> list coord) : labeling :=
+  let F := ccl_pass_f img adj cn in
+  let u := Root (equivF F) in
+  compact_labels u (resolve_labels u (labelsF F)) (nextF F - 1).
+
+Definition ccl_4_fast (img : image) : labeling :=
+  ccl_algorithm_f img adjacent_4 check_prior_neighbors_4.
+Definition ccl_8_fast (img : image) : labeling :=
+  ccl_algorithm_f img adjacent_8 check_prior_neighbors_8.
+
+Lemma ccl_algorithm_f_eq : forall img adj cn c,
+  ccl_algorithm_f img adj cn c =
+  build_label_map (Root (equivF (ccl_pass_f img adj cn))) (nextF (ccl_pass_f img adj cn) - 1)
+                  (Root (equivF (ccl_pass_f img adj cn)) (labelsF (ccl_pass_f img adj cn) c)).
+Proof. intros. unfold ccl_algorithm_f, compact_labels, resolve_labels. reflexivity. Qed.
+
+(** Re-extracted form of the pass invariant. *)
+Lemma InvF_pass' : forall img adj cn,
+  labels (ccl_pass img adj cn) = labelsF (ccl_pass_f img adj cn)
+  /\ next_label (ccl_pass img adj cn) = nextF (ccl_pass_f img adj cn)
+  /\ Sim (equiv (ccl_pass img adj cn)) (equivF (ccl_pass_f img adj cn)).
+Proof. intros. exact (InvF_pass img adj cn). Qed.
+
+(** Partition agreement at the pass level. *)
+Lemma Hpart_pass : forall img adj cn x y,
+  uf_same_set (equiv (ccl_pass img adj cn)) x y
+  = uf_same_set (Root (equivF (ccl_pass_f img adj cn))) x y.
+Proof.
+  intros img adj cn x y. destruct (InvF_pass' img adj cn) as [_ [_ [_ Hp]]].
+  rewrite Hp. unfold uf_same_set, uf_find. reflexivity.
+Qed.
+
+Lemma adjacent_4_compatible : adj_compatible adjacent_4 check_prior_neighbors_4.
+Proof.
+  unfold adj_compatible. split; [|split].
+  - apply adjacent_4_sym.
+  - apply check_prior_neighbors_4_sound.
+  - apply check_prior_neighbors_4_complete_for_prior.
+Qed.
+
+(** Connected pixels are union-find equivalent at the (slow) pass level. *)
+Lemma connected_uf_same_set_g : forall adj cn, adj_compatible adj cn ->
+  forall img a b, connected img adj a b ->
+  uf_same_set (equiv (ccl_pass img adj cn))
+              (labels (ccl_pass img adj cn) a) (labels (ccl_pass img adj cn) b) = true.
+Proof.
+  intros adj cn Hcompat img a b Hconn.
+  induction Hconn as [c Hfg | a b c Hab IH Hfgc Hadjbc].
+  - apply uf_same_set_refl.
+  - assert (Hfgs := connected_foreground img adj a b Hab). destruct Hfgs as [_ Hfgb].
+    assert (Hbc : uf_same_set (equiv (ccl_pass img adj cn))
+                    (labels (ccl_pass img adj cn) b) (labels (ccl_pass img adj cn) c) = true).
+    { apply (adjacent_equiv_after_pass_g adj cn Hcompat img b c Hfgb Hfgc Hadjbc);
+        apply foreground_in_bounds; assumption. }
+    apply (uf_same_set_trans _ _ (labels (ccl_pass img adj cn) b)); [exact IH | exact Hbc].
+Qed.
+
+(** Background pixels get 0. *)
+Lemma ccl_algorithm_f_background : forall adj cn img c,
+  get_pixel img c = false -> ccl_algorithm_f img adj cn c = 0.
+Proof.
+  intros adj cn img c Hbg. rewrite ccl_algorithm_f_eq.
+  assert (HL : labelsF (ccl_pass_f img adj cn) c = 0).
+  { destruct (InvF_pass' img adj cn) as [Hl _]. rewrite <- Hl.
+    apply ccl_pass_labels_background_zero. exact Hbg. }
+  rewrite HL.
+  destruct (RZ_pass img adj cn) as [_ [HZ _]].
+  rewrite HZ. apply build_label_map_zero.
+Qed.
+
+(** Soundness: connected pixels get equal fast labels. *)
+Lemma ccl_algorithm_f_sound : forall adj cn, adj_compatible adj cn ->
+  forall img c1 c2, connected img adj c1 c2 ->
+  ccl_algorithm_f img adj cn c1 = ccl_algorithm_f img adj cn c2.
+Proof.
+  intros adj cn Hcompat img c1 c2 Hconn.
+  destruct (InvF_pass' img adj cn) as [Hl _].
+  assert (Hfgs := connected_foreground img adj c1 c2 Hconn). destruct Hfgs as [Hfg1 Hfg2].
+  assert (Hpos1 : labelsF (ccl_pass_f img adj cn) c1 > 0).
+  { rewrite <- Hl. apply ccl_pass_labels_foreground;
+      [exact Hfg1 | apply foreground_in_bounds; exact Hfg1]. }
+  assert (Hpos2 : labelsF (ccl_pass_f img adj cn) c2 > 0).
+  { rewrite <- Hl. apply ccl_pass_labels_foreground;
+      [exact Hfg2 | apply foreground_in_bounds; exact Hfg2]. }
+  assert (Hss : uf_same_set (Root (equivF (ccl_pass_f img adj cn)))
+                  (labelsF (ccl_pass_f img adj cn) c1)
+                  (labelsF (ccl_pass_f img adj cn) c2) = true).
+  { rewrite <- Hpart_pass, <- !Hl.
+    apply (connected_uf_same_set_g adj cn Hcompat img c1 c2 Hconn). }
+  unfold ccl_algorithm_f.
+  apply (compact_resolved_preserves_equiv (Root (equivF (ccl_pass_f img adj cn)))
+           (labelsF (ccl_pass_f img adj cn)) (nextF (ccl_pass_f img adj cn) - 1)
+           c1 c2 Hpos1 Hpos2 Hss).
+Qed.
+
+(** Completeness: equal positive fast labels imply connected. *)
+Lemma ccl_algorithm_f_complete : forall adj cn, adj_compatible adj cn ->
+  forall img c1 c2, ccl_algorithm_f img adj cn c1 = ccl_algorithm_f img adj cn c2 ->
+  ccl_algorithm_f img adj cn c1 > 0 -> connected img adj c1 c2.
+Proof.
+  intros adj cn Hcompat img c1 c2 Heq Hpos.
+  destruct (InvF_pass' img adj cn) as [Hl _].
+  destruct (RZ_pass img adj cn) as [HokF _].
+  assert (Hfg1 : get_pixel img c1 = true).
+  { destruct (get_pixel img c1) eqn:E; [reflexivity|].
+    rewrite (ccl_algorithm_f_background adj cn img c1 E) in Hpos. lia. }
+  assert (Hfg2 : get_pixel img c2 = true).
+  { destruct (get_pixel img c2) eqn:E; [reflexivity|].
+    rewrite (ccl_algorithm_f_background adj cn img c2 E) in Heq.
+    rewrite Heq in Hpos. lia. }
+  rewrite !ccl_algorithm_f_eq in Heq. rewrite ccl_algorithm_f_eq in Hpos.
+  assert (Hinj : Root (equivF (ccl_pass_f img adj cn)) (Root (equivF (ccl_pass_f img adj cn)) (labelsF (ccl_pass_f img adj cn) c1))
+               = Root (equivF (ccl_pass_f img adj cn)) (Root (equivF (ccl_pass_f img adj cn)) (labelsF (ccl_pass_f img adj cn) c2))).
+  { apply (build_label_map_inj_rep (Root (equivF (ccl_pass_f img adj cn)))
+             (nextF (ccl_pass_f img adj cn) - 1)
+             (Root (equivF (ccl_pass_f img adj cn)) (labelsF (ccl_pass_f img adj cn) c1))
+             (Root (equivF (ccl_pass_f img adj cn)) (labelsF (ccl_pass_f img adj cn) c2))).
+    - exact Heq.
+    - intro Hc. rewrite Hc in Hpos. lia. }
+  rewrite (Root_idem (equivF (ccl_pass_f img adj cn)) (labelsF (ccl_pass_f img adj cn) c1) HokF) in Hinj.
+  rewrite (Root_idem (equivF (ccl_pass_f img adj cn)) (labelsF (ccl_pass_f img adj cn) c2) HokF) in Hinj.
+  assert (Hss : uf_same_set (Root (equivF (ccl_pass_f img adj cn)))
+                  (labelsF (ccl_pass_f img adj cn) c1)
+                  (labelsF (ccl_pass_f img adj cn) c2) = true).
+  { unfold uf_same_set, uf_find. apply Nat.eqb_eq. exact Hinj. }
+  rewrite <- Hpart_pass, <- !Hl in Hss.
+  apply (ccl_pass_uf_implies_connected_g adj cn Hcompat img c1 c2 Hfg1 Hfg2 Hss).
+Qed.
+
+(** Instantiations for 4- and 8-connectivity. *)
+Theorem ccl_4_fast_background : forall img c, get_pixel img c = false -> ccl_4_fast img c = 0.
+Proof. intros. apply ccl_algorithm_f_background. assumption. Qed.
+Theorem ccl_4_fast_sound : forall img c1 c2,
+  connected img adjacent_4 c1 c2 -> ccl_4_fast img c1 = ccl_4_fast img c2.
+Proof. intros. apply (ccl_algorithm_f_sound adjacent_4 check_prior_neighbors_4 adjacent_4_compatible); assumption. Qed.
+Theorem ccl_4_fast_complete : forall img c1 c2,
+  ccl_4_fast img c1 = ccl_4_fast img c2 -> ccl_4_fast img c1 > 0 -> connected img adjacent_4 c1 c2.
+Proof. intros. apply (ccl_algorithm_f_complete adjacent_4 check_prior_neighbors_4 adjacent_4_compatible); assumption. Qed.
+
+Theorem ccl_8_fast_background : forall img c, get_pixel img c = false -> ccl_8_fast img c = 0.
+Proof. intros. apply ccl_algorithm_f_background. assumption. Qed.
+Theorem ccl_8_fast_sound : forall img c1 c2,
+  connected img adjacent_8 c1 c2 -> ccl_8_fast img c1 = ccl_8_fast img c2.
+Proof. intros. apply (ccl_algorithm_f_sound adjacent_8 check_prior_neighbors_8 adjacent_8_compatible); assumption. Qed.
+Theorem ccl_8_fast_complete : forall img c1 c2,
+  ccl_8_fast img c1 = ccl_8_fast img c2 -> ccl_8_fast img c1 > 0 -> connected img adjacent_8 c1 c2.
+Proof. intros. apply (ccl_algorithm_f_complete adjacent_8 check_prior_neighbors_8 adjacent_8_compatible); assumption. Qed.
+
+(** ** Label bound, for the foreground-positivity field of correctness *)
+
+Lemma upar_bounded : forall F N z,
+  (forall k v, In (k,v) (ufr_parent F) -> v < N) -> z < N -> upar F z < N.
+Proof.
+  intros F N z Hb Hz. unfold upar, ufr_lookup.
+  destruct (find (fun p => Nat.eqb (fst p) z) (ufr_parent F)) as [p|] eqn:E.
+  - apply find_some in E. destruct E as [Hin _]. destruct p as [k v]. apply (Hb k v). exact Hin.
+  - exact Hz.
+Qed.
+
+Lemma ufind_bounded : forall F N,
+  (forall k v, In (k,v) (ufr_parent F) -> v < N) ->
+  forall f z, z < N -> ufind F f z < N.
+Proof.
+  intros F N Hb f. induction f as [|f IH]; intros z Hz.
+  - simpl. exact Hz.
+  - simpl. destruct (uroot F z); [exact Hz | apply IH; apply upar_bounded; assumption].
+Qed.
+
+(** Parent-value bound invariant. *)
+Definition PB (F : ufr) (N : nat) : Prop := forall k v, In (k,v) (ufr_parent F) -> v < N.
+
+Lemma Root_bounded : forall F N z, PB F N -> z < N -> Root F z < N.
+Proof. intros F N z HPB Hz. unfold Root. apply ufind_bounded; [exact HPB | exact Hz]. Qed.
+
+Lemma snd_uunion_parent : forall F fuel m l k v,
+  In (k,v) (ufr_parent (uunion F fuel m l)) ->
+  v = ufind F fuel m \/ v = ufind F fuel l \/ In (k,v) (ufr_parent F).
+Proof.
+  intros F fuel m l k v Hin. unfold uunion in Hin. cbv zeta in Hin.
+  destruct (Nat.eqb (ufind F fuel m) (ufind F fuel l)).
+  - right; right; exact Hin.
+  - destruct (Nat.ltb (urnk F (ufind F fuel m)) (urnk F (ufind F fuel l))).
+    + simpl in Hin. destruct Hin as [E | Hin];
+        [ inversion E; subst; right; left; reflexivity | right; right; exact Hin ].
+    + destruct (Nat.ltb (urnk F (ufind F fuel l)) (urnk F (ufind F fuel m))).
+      * simpl in Hin. destruct Hin as [E | Hin];
+          [ inversion E; subst; left; reflexivity | right; right; exact Hin ].
+      * simpl in Hin. destruct Hin as [E | Hin];
+          [ inversion E; subst; left; reflexivity | right; right; exact Hin ].
+Qed.
+
+Lemma PB_record_f : forall F N m l, PB F N -> m < N -> l < N -> PB (record_adjacency_f F m l) N.
+Proof.
+  intros F N m l HPB Hm Hl. unfold record_adjacency_f.
+  destruct (andb (negb (Nat.eqb m 0)) (negb (Nat.eqb l 0))).
+  - destruct (Nat.eqb m l); [exact HPB|].
+    unfold PB. intros k v Hin. apply snd_uunion_parent in Hin.
+    destruct Hin as [Hv | [Hv | Hin]].
+    + rewrite Hv. change (ufind F (S (ufr_maxrank F)) m) with (Root F m).
+      apply Root_bounded; assumption.
+    + rewrite Hv. change (ufind F (S (ufr_maxrank F)) l) with (Root F l).
+      apply Root_bounded; assumption.
+    + exact (HPB k v Hin).
+  - exact HPB.
+Qed.
+
+Lemma PB_fold_record_f : forall ls m F N,
+  PB F N -> m < N -> (forall l', In l' ls -> l' < N) ->
+  PB (fold_left (fun G l' => record_adjacency_f G m l') ls F) N.
+Proof.
+  induction ls as [|x xs IH]; intros m F N HPB Hm Hall; simpl.
+  - exact HPB.
+  - apply IH; [ apply PB_record_f; [exact HPB | exact Hm | apply Hall; left; reflexivity]
+             | exact Hm | intros l' Hl'; apply Hall; right; exact Hl' ].
+Qed.
+
+(** Full branch description of one fast pixel. *)
+Lemma pp_f_branches : forall img adj cn sf c,
+  process_pixel_f img adj cn sf c = sf
+  \/ process_pixel_f img adj cn sf c
+       = mkCclF (fun c' => if coord_eqb c c' then nextF sf else labelsF sf c') (equivF sf) (S (nextF sf))
+  \/ (exists l rest,
+        filter (fun z => negb (Nat.eqb z 0)) (map (labelsF sf) (cn img c)) = l :: rest
+        /\ process_pixel_f img adj cn sf c
+           = mkCclF (fun c' => if coord_eqb c c' then fold_left Nat.min rest l else labelsF sf c')
+                    (fold_left (fun G l' => record_adjacency_f G (fold_left Nat.min rest l) l') (l :: rest) (equivF sf))
+                    (nextF sf)).
+Proof.
+  intros img adj cn sf c. unfold process_pixel_f. destruct (get_pixel img c) eqn:Hp.
+  - remember (filter (fun z => negb (Nat.eqb z 0)) (map (labelsF sf) (cn img c))) as pl eqn:Hf.
+    destruct pl as [|l rest].
+    + right; left. reflexivity.
+    + right; right. exists l, rest. split; reflexivity.
+  - left. reflexivity.
+Qed.
+
+Definition FB (sf : cclF) : Prop :=
+  (forall c, labelsF sf c < nextF sf) /\ PB (equivF sf) (nextF sf).
+
+Lemma FB_step : forall img adj cn sf c, FB sf -> FB (process_pixel_f img adj cn sf c).
+Proof.
+  intros img adj cn sf c [HLB HPB].
+  destruct (pp_f_branches img adj cn sf c) as [He | [He | [l [rest [Hf He]]]]]; rewrite He.
+  - split; assumption.
+  - split.
+    + intro c'. simpl. destruct (coord_eqb c c'); [lia | assert (labelsF sf c' < nextF sf) by apply HLB; lia].
+    + simpl. unfold PB. intros k v Hin. assert (v < nextF sf) by (apply (HPB k v); exact Hin). lia.
+  - assert (Hbnd : forall x, In x (l :: rest) -> x < nextF sf).
+    { intros x Hx.
+      assert (In x (filter (fun z => negb (Nat.eqb z 0)) (map (labelsF sf) (cn img c))))
+        by (rewrite Hf; exact Hx).
+      apply filter_In in H. destruct H as [Hmap _]. apply in_map_iff in Hmap.
+      destruct Hmap as [c'' [Heq _]]. rewrite <- Heq. apply HLB. }
+    assert (Hmin : fold_left Nat.min rest l < nextF sf).
+    { apply fold_min_strict_bounded;
+        [ apply Hbnd; left; reflexivity | intros x Hx; apply Hbnd; right; exact Hx ]. }
+    split.
+    + intro c'. simpl. destruct (coord_eqb c c'); [exact Hmin | apply HLB].
+    + apply (PB_fold_record_f (l :: rest) (fold_left Nat.min rest l) (equivF sf) (nextF sf));
+        [exact HPB | exact Hmin | exact Hbnd].
+Qed.
+
+Lemma FB_fold : forall img adj cn coords sf,
+  FB sf -> FB (fold_left (process_pixel_f img adj cn) coords sf).
+Proof.
+  intros img adj cn coords. induction coords as [|c cs IH]; intros sf H; simpl.
+  - exact H.
+  - apply IH. apply FB_step. exact H.
+Qed.
+
+Lemma FB_pass : forall img adj cn, FB (ccl_pass_f img adj cn).
+Proof.
+  intros img adj cn. unfold ccl_pass_f. apply FB_fold.
+  unfold FB, initF; simpl. split.
+  - intro c. unfold empty_labeling. lia.
+  - unfold PB. intros k v Hin. simpl in Hin. contradiction.
+Qed.
+
+(** Foreground pixels get a positive fast label. *)
+Lemma ccl_algorithm_f_foreground_positive : forall adj cn img c,
+  get_pixel img c = true -> ccl_algorithm_f img adj cn c > 0.
+Proof.
+  intros adj cn img c Hfg. rewrite ccl_algorithm_f_eq.
+  destruct (InvF_pass' img adj cn) as [Hl _].
+  destruct (RZ_pass img adj cn) as [HokF [_ HR]].
+  destruct (FB_pass img adj cn) as [HLB HPB].
+  assert (HLc_pos : labelsF (ccl_pass_f img adj cn) c > 0).
+  { rewrite <- Hl. apply ccl_pass_labels_foreground;
+      [exact Hfg | apply foreground_in_bounds; exact Hfg]. }
+  assert (HLc_bound : labelsF (ccl_pass_f img adj cn) c < nextF (ccl_pass_f img adj cn)) by apply HLB.
+  assert (Hrt_pos : Root (equivF (ccl_pass_f img adj cn)) (labelsF (ccl_pass_f img adj cn) c) > 0).
+  { assert (Root (equivF (ccl_pass_f img adj cn)) (labelsF (ccl_pass_f img adj cn) c) <> 0)
+      by (apply HR; lia). lia. }
+  assert (Hrt_bound : Root (equivF (ccl_pass_f img adj cn)) (labelsF (ccl_pass_f img adj cn) c)
+                      < nextF (ccl_pass_f img adj cn))
+    by (apply Root_bounded; [exact HPB | exact HLc_bound]).
+  apply build_label_map_preserves_positive.
+  - exact Hrt_pos.
+  - lia.
+  - unfold uf_find. rewrite (Root_idem (equivF (ccl_pass_f img adj cn)) (labelsF (ccl_pass_f img adj cn) c) HokF).
+    exact Hrt_pos.
+  - unfold uf_find. rewrite (Root_idem (equivF (ccl_pass_f img adj cn)) (labelsF (ccl_pass_f img adj cn) c) HokF).
+    lia.
+  - intro n. unfold uf_find. apply Root_idem. exact HokF.
+Qed.
+
+(** ** Full correctness of the efficient algorithm *)
+
+Theorem ccl_4_fast_correct : forall img, correct_labeling img adjacent_4 (ccl_4_fast img).
+Proof.
+  intro img. constructor.
+  - intros c H. apply ccl_4_fast_background. exact H.
+  - intros c H. apply (ccl_algorithm_f_foreground_positive adjacent_4 check_prior_neighbors_4). exact H.
+  - intros c1 c2 H. apply ccl_4_fast_sound. exact H.
+  - intros c1 c2 Heq Hpos. apply ccl_4_fast_complete; assumption.
+Qed.
+
+Theorem ccl_8_fast_correct : forall img, correct_labeling img adjacent_8 (ccl_8_fast img).
+Proof.
+  intro img. constructor.
+  - intros c H. apply ccl_8_fast_background. exact H.
+  - intros c H. apply (ccl_algorithm_f_foreground_positive adjacent_8 check_prior_neighbors_8). exact H.
+  - intros c1 c2 H. apply ccl_8_fast_sound. exact H.
+  - intros c1 c2 Heq Hpos. apply ccl_8_fast_complete; assumption.
+Qed.
+
+
 (** ** Zero Is Never Used for Foreground *)
 Theorem ccl_4_zero_only_background : forall img,
   let final_labeling := ccl_4 img in
@@ -10066,7 +10911,24 @@ Extraction "ccl_faithful.ml"
   ccl_algorithm
   ccl_4
   ccl_8
-  
+
+  (* Efficient (union-by-rank) algorithm and its verified components *)
+  ufr
+  mkUfr
+  upar
+  urnk
+  uroot
+  ufind
+  ufr_maxrank
+  uunion
+  Root
+  record_adjacency_f
+  process_pixel_f
+  ccl_pass_f
+  ccl_algorithm_f
+  ccl_4_fast
+  ccl_8_fast
+
   (* Analysis functions *)
   num_components
   component_size
